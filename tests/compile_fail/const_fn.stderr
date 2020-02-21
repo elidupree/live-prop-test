@@ -1,0 +1,5 @@
+error: live-prop-test doesn't support testing const fn items
+ --> $DIR/const_fn.rs:4:1
+  |
+4 | const fn five() -> i32 {
+  | ^^^^^
