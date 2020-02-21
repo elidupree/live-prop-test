@@ -1,0 +1,5 @@
+error: live-prop-test only supports function arguments that are bound as an identifier
+ --> $DIR/wildcard_argument.rs:4:9
+  |
+4 | fn five(_: i32) -> i32 {
+  |         ^
