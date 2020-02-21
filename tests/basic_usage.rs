@@ -31,3 +31,14 @@ fn test_exp2_works() {
 fn test_exp2_wrong_fails() {
   exp2_wrong(4);
 }
+
+#[live_prop_test(test_five)]
+fn five(_: i32) -> i32 {
+  2 << exponent
+}
+
+fn test_five(_input: &i32) -> impl FnOnce(&i32) {
+  move |result| {
+    assert_eq!(result, 5);
+  }
+}
