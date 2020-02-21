@@ -26,7 +26,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     sig,
     block,
     ..
-  } = function;
+  } = &function;
 
   let Signature {
     constness,
@@ -40,7 +40,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
       ..
     },
     ..
-  } = &sig;
+  } = sig;
 
   if let Some(constness) = constness {
     return quote_spanned! {constness.span=> compile_error! ("live-prop-test doesn't support testing const fn items");}.into();
@@ -67,6 +67,10 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
   }
 
   quote!(
+    #[cfg(not(debug_assertions))]
+    #function
+    
+    #[cfg(debug_assertions)]
     #(#attrs) *
     #vis #sig
     {
