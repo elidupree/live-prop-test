@@ -32,8 +32,6 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     constness,
     unsafety,
     asyncness,
-    abi,
-    ident,
     inputs: parameters,
     output: return_type,
     generics: syn::Generics {
@@ -51,14 +49,8 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     return quote_spanned! {asyncness.span=> compile_error! ("live-prop-test doesn't support testing async fn items");}.into();
   }
 
-  // Note: parameters can be specified as patterns that don't capture all of the data,
-  // meaning that we can't simply include #parameters as the parameter list of the outer function,
-  // because then we wouldn't necessarily be able to call the test function.
-
   let mut parameter_values: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut parameter_value_references: Punctuated<Expr, Token![,]> = Punctuated::new();
-
-  //let constructed_span = unimplemented!();//Span::def_site();
 
   for parameter in parameters {
     let parameter_value = match parameter {
@@ -76,7 +68,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
 
   quote!(
     #(#attrs) *
-    #vis #unsafety #abi fn #ident<#generic_parameters> (#parameters) #return_type
+    #vis #sig
     {
       let test_closure = #test_function_path(#parameter_value_references);
 
