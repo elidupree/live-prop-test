@@ -1,0 +1,8 @@
+[package]
+name = "live-prop-test"
+version = "0.1.0"
+authors = ["Eli Dupree <vcs@elidupree.com>"]
+edition = "2018"
+
+[dependencies]
+live-prop-test-macros = { path = "../live-prop-test-macros", version = "0.1" }

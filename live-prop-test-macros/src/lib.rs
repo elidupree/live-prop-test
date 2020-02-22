@@ -69,7 +69,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
   quote!(
     #[cfg(not(debug_assertions))]
     #function
-    
+
     #[cfg(debug_assertions)]
     #(#attrs) *
     #vis #sig

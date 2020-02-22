@@ -1,15 +1,6 @@
-[package]
-name = "live-prop-test"
-version = "0.1.0"
-authors = ["Eli Dupree <vcs@elidupree.com>"]
-edition = "2018"
+[workspace]
 
-[lib]
-proc-macro = true
-
-[dependencies]
-syn = {version = "1.0", features = ["full"]}
-quote = "1.0"
-
-[dev-dependencies]
-trybuild = "1.0"
+members = [
+  "live-prop-test",
+  "live-prop-test-macros",
+]

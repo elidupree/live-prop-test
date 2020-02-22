@@ -1,4 +1,4 @@
-use live_prop_test::live_prop_test;
+use live_prop_test_macros::live_prop_test;
 
 #[live_prop_test(test_five)]
 fn five(_: i32) -> i32 {
