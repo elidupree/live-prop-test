@@ -74,16 +74,39 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     #(#attrs) *
     #vis #sig
     {
-      let test_closure = #test_function_path(#parameter_value_references);
-
       // Note: not applying `attrs` here; I'm not aware of any attribute that would matter on the inner function, and some things you could theoretically apply – like #[test] – only make sense on the outer function
       #unsafety fn original<#generic_parameters> (#parameters) #return_type
       #where_clause
       #block
 
+      std::thread_local! {
+        static HISTORY: std::cell::RefCell<live_prop_test::TestHistory> = std::cell::RefCell::new(live_prop_test::TestHistory::new());
+      }
+
+      let do_test = HISTORY.with (| history | {
+        let mut history = history.borrow_mut();
+        history.roll_to_test()
+      });
+
+      let test_info = if do_test {
+        let start_time = std::time::Instant::now();
+        let test_closure = #test_function_path(#parameter_value_references);
+        std::option::Option::Some ((test_closure, start_time.elapsed()))
+      } else {
+        std::option::Option::None
+      };
+
       let result = original(#parameter_values);
 
-      (test_closure)(&result);
+      if let std::option::Option::Some ((test_closure, elapsed)) = test_info{
+        let start_time = std::time::Instant::now();
+        (test_closure)(&result);
+        let total_elapsed = elapsed + start_time.elapsed();
+        HISTORY.with (| history | {
+          let mut history = history.borrow_mut();
+          history.observe_test (total_elapsed);
+        });
+      }
 
       result
     }
