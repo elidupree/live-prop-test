@@ -1,4 +1,5 @@
 use rand::random;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -17,8 +18,13 @@ pub struct TestHistory {
   earliest_remembered_chunk_index: usize,
 }
 
+thread_local! {
+  static NUM_TEST_FUNCTIONS: RefCell<u64> = RefCell::new(0);
+}
+
 impl TestHistory {
   pub fn new() -> TestHistory {
+    NUM_TEST_FUNCTIONS.with(|n| *n.borrow_mut() += 1);
     TestHistory {
       earliest_remembered_chunk_index: 0,
       start_time: Instant::now(),
@@ -32,7 +38,7 @@ impl TestHistory {
     //let mut running_total_function_calls = 0;
     let mut lowest_probability = 1.0;
 
-    let target_time_fraction = 0.1;
+    let target_time_fraction = 0.1 / NUM_TEST_FUNCTIONS.with(|n| *n.borrow()) as f64;
 
     self.update_chunks();
     for chunk in self.chunks.iter().rev() {
