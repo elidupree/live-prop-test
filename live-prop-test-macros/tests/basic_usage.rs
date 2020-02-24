@@ -1,4 +1,5 @@
 use live_prop_test_macros::live_prop_test;
+use std::fmt::Debug;
 
 #[live_prop_test(test_exp2)]
 fn exp2(exponent: i32) -> i32 {
@@ -30,4 +31,28 @@ fn test_exp2_works() {
 #[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_wrong_fails() {
   exp2_wrong(4);
+}
+
+#[live_prop_test(generic_inferred_test)]
+fn generic_inferred_function<T: Debug>(input: &T) {}
+
+fn generic_inferred_test<T: Debug>(input: &T) -> impl FnOnce(&()) {
+  move |result| {}
+}
+
+#[test]
+fn generic_inferred() {
+  generic_inferred_function(&4);
+}
+
+#[live_prop_test(generic_inferred_test)]
+fn generic_explicit_function<T: Default>() {}
+
+fn generic_explicit_test<T: Default>() -> impl FnOnce(&()) {
+  move |result| {}
+}
+
+#[test]
+fn generic_explicit() {
+  generic_explicit_function::<i32>();
 }
