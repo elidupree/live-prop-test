@@ -12,6 +12,7 @@ struct HistoryChunk {
 const CHUNK_DURATION: Duration = Duration::from_millis(1);
 const MAX_REMEMBERED_CHUNKS: usize = (1_000_000_000.0 / CHUNK_DURATION.as_nanos() as f64) as usize;
 
+#[doc(hidden)]
 pub struct TestHistory {
   chunks: VecDeque<HistoryChunk>,
   start_time: Instant,
