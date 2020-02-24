@@ -4,8 +4,8 @@ use proc_macro::TokenStream;
 //use proc_macro2::Span;
 use quote::{quote, quote_spanned};
 use syn::{
-  parse_quote, punctuated::Punctuated, spanned::Spanned, AttributeArgs, Expr, FnArg, ItemFn, Meta,
-  NestedMeta, Pat, PatIdent, Signature, Token,
+  parse_quote, punctuated::Punctuated, spanned::Spanned, AttributeArgs, Expr, FnArg,
+  GenericArgument, GenericParam, ItemFn, Meta, NestedMeta, Pat, PatIdent, Signature, Token,
 };
 
 #[proc_macro_attribute]
@@ -66,6 +66,25 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     parameter_values.push(parameter_value);
   }
 
+  let mut generic_parameter_values: Punctuated<GenericArgument, Token! [,]> = Punctuated::new();
+
+  for parameter in generic_parameters {
+    match parameter {
+      GenericParam::Type(type_parameter) => {
+        let value = &type_parameter.ident;
+        generic_parameter_values.push(parse_quote! {#value});
+      }
+      GenericParam::Const(const_parameter) => {
+        let value = &const_parameter.ident;
+        generic_parameter_values.push(parse_quote! {#value});
+      }
+      GenericParam::Lifetime(lifetime_parameter) => {
+        let value = &lifetime_parameter.lifetime;
+        generic_parameter_values.push(parse_quote! {#value});
+      }
+    }
+  }
+
   quote!(
     #[cfg(not(debug_assertions))]
     #function
@@ -90,13 +109,13 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
 
       let test_info = if do_test {
         let start_time = std::time::Instant::now();
-        let test_closure = #test_function_path(#parameter_value_references);
+        let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
         std::option::Option::Some ((test_closure, start_time.elapsed()))
       } else {
         std::option::Option::None
       };
 
-      let result = original(#parameter_values);
+      let result = original::<#generic_parameter_values>(#parameter_values);
 
       if let std::option::Option::Some ((test_closure, elapsed)) = test_info{
         let start_time = std::time::Instant::now();

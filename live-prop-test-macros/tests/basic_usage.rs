@@ -34,10 +34,10 @@ fn test_exp2_wrong_fails() {
 }
 
 #[live_prop_test(generic_inferred_test)]
-fn generic_inferred_function<T: Debug>(input: &T) {}
+fn generic_inferred_function<T: Debug>(_input: &T) {}
 
-fn generic_inferred_test<T: Debug>(input: &T) -> impl FnOnce(&()) {
-  move |result| {}
+fn generic_inferred_test<T: Debug>(_input: &T) -> impl FnOnce(&()) {
+  move |_result| {}
 }
 
 #[test]
@@ -45,11 +45,11 @@ fn generic_inferred() {
   generic_inferred_function(&4);
 }
 
-#[live_prop_test(generic_inferred_test)]
+#[live_prop_test(generic_explicit_test)]
 fn generic_explicit_function<T: Default>() {}
 
 fn generic_explicit_test<T: Default>() -> impl FnOnce(&()) {
-  move |result| {}
+  move |_result| {}
 }
 
 #[test]
