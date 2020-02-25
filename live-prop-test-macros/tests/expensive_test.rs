@@ -10,10 +10,13 @@ struct TestTracker {
 #[live_prop_test(expensive_test)]
 fn tested_function(_tracker: &RefCell<TestTracker>) {}
 
-fn expensive_test<'a>(tracker: &RefCell<TestTracker>) -> impl FnOnce(&()) + 'a {
+fn expensive_test<'a>(
+  tracker: &RefCell<TestTracker>,
+) -> impl FnOnce(&()) -> Result<(), String> + 'a {
   tracker.borrow_mut().runs += 1;
   move |_| {
     std::thread::sleep(Duration::from_micros(50));
+    Ok(())
   }
 }
 

@@ -119,11 +119,11 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
 
       if let std::option::Option::Some ((test_closure, elapsed)) = test_info{
         let start_time = std::time::Instant::now();
-        (test_closure)(&result);
+        let test_result: Result<(), String> = (test_closure)(&result);
         let total_elapsed = elapsed + start_time.elapsed();
-        HISTORY.with (| history | {
+        HISTORY.with (move | history | {
           let mut history = history.borrow_mut();
-          history.observe_test (total_elapsed);
+          history.observe_test (total_elapsed, test_result);
         });
       }
 

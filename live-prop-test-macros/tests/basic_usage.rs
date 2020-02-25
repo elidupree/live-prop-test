@@ -1,4 +1,4 @@
-use live_prop_test_macros::live_prop_test;
+use live_prop_test::{live_prop_test, lpt_assert_eq};
 use std::fmt::Debug;
 
 #[live_prop_test(test_exp2)]
@@ -11,14 +11,15 @@ fn exp2_wrong(exponent: i32) -> i32 {
   2 << exponent
 }
 
-fn test_exp2<'a>(exponent: &'a i32) -> impl FnOnce(&i32) + 'a {
+fn test_exp2<'a>(exponent: &'a i32) -> impl FnOnce(&i32) -> Result<(), String> + 'a {
   move |power| {
-    assert_eq!(
+    lpt_assert_eq!(
       *power,
       std::iter::repeat(2)
         .take(*exponent as usize)
         .product::<i32>()
     );
+    Ok(())
   }
 }
 
@@ -36,8 +37,8 @@ fn test_exp2_wrong_fails() {
 #[live_prop_test(generic_inferred_test)]
 fn generic_inferred_function<T: Debug>(_input: &T) {}
 
-fn generic_inferred_test<T: Debug>(_input: &T) -> impl FnOnce(&()) {
-  move |_result| {}
+fn generic_inferred_test<T: Debug>(_input: &T) -> impl FnOnce(&()) -> Result<(), String> {
+  move |_result| Ok(())
 }
 
 #[test]
@@ -48,8 +49,8 @@ fn generic_inferred() {
 #[live_prop_test(generic_explicit_test)]
 fn generic_explicit_function<T: Default>() {}
 
-fn generic_explicit_test<T: Default>() -> impl FnOnce(&()) {
-  move |_result| {}
+fn generic_explicit_test<T: Default>() -> impl FnOnce(&()) -> Result<(), String> {
+  move |_result| Ok(())
 }
 
 #[test]

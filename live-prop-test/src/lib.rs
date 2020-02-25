@@ -3,6 +3,70 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+#[doc(inline)]
+pub use live_prop_test_macros::live_prop_test;
+
+#[macro_export]
+macro_rules! lpt_assert {
+    ($cond:expr) => {
+        $crate::lpt_assert!($cond, concat!("assertion failed: ", stringify!($cond)))
+    };
+
+    ($cond:expr, $($fmt:tt)*) => {
+        if !$cond {
+            let message = format!($($fmt)*);
+            let message = format!("{} at {}:{}", message, file!(), line!());
+            return ::std::result::Result::Err(message);
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! lpt_assert_eq {
+    ($left:expr, $right:expr) => {{
+        let left = $left;
+        let right = $right;
+        $crate::lpt_assert!(
+            left == right,
+            "assertion failed: `(left == right)` \
+             \n  left: `{:?}`,\n right: `{:?}`",
+            left, right);
+    }};
+
+    ($left:expr, $right:expr, $fmt:tt $($args:tt)*) => {{
+        let left = $left;
+        let right = $right;
+        $crate::lpt_assert!(
+            left == right,
+            concat!(
+                "assertion failed: `(left == right)` \
+                 \n  left: `{:?}`, \n right: `{:?}`: ", $fmt),
+            left, right $($args)*);
+    }};
+}
+
+#[macro_export]
+macro_rules! lpt_assert_ne {
+    ($left:expr, $right:expr) => {{
+        let left = $left;
+        let right = $right;
+        lpt_assert!(
+            left != right,
+            "assertion failed: `(left != right)`\
+             \n  left: `{:?}`,\n right: `{:?}`",
+                     left, right);
+    }};
+
+    ($left:expr, $right:expr, $fmt:tt $($args:tt)*) => {{
+        let left = $left;
+        let right = $right;
+        lpt_assert!(left != right, concat!(
+            "assertion failed: `(left != right)`\
+             \n  left: `{:?}`,\n right: `{:?}`: ", $fmt),
+                     left, right $($args)*);
+    }};
+}
+
 struct HistoryChunk {
   total_test_time: Duration,
   total_function_calls: u64,
@@ -81,12 +145,16 @@ impl TestHistory {
     result
   }
 
-  pub fn observe_test(&mut self, test_time: Duration) {
+  pub fn observe_test(&mut self, test_time: Duration, result: Result<(), String>) {
     self.update_chunks();
     let chunk = self.chunks.back_mut().unwrap();
     chunk.total_test_time += test_time;
     chunk.total_function_calls += 1;
     chunk.total_tests_run += 1;
+
+    if let Err(message) = result {
+      panic!("{}", message);
+    }
   }
 
   fn chunk_index(since_start: Duration) -> usize {
