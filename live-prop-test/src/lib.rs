@@ -101,6 +101,7 @@ pub struct TestHistory {
   chunks: VecDeque<HistoryChunk>,
   start_time: Instant,
   earliest_remembered_chunk_index: usize,
+  currently_inside_test: bool,
 }
 
 thread_local! {
@@ -114,9 +115,15 @@ impl TestHistory {
       earliest_remembered_chunk_index: 0,
       start_time: Instant::now(),
       chunks: VecDeque::with_capacity(MAX_REMEMBERED_CHUNKS),
+      currently_inside_test: false,
     }
   }
   pub fn roll_to_test(&mut self) -> bool {
+    // always ignore recursive calls, so nothing weird happens if you call the function from inside the test (e.g. to test that it is commutative)
+    if self.currently_inside_test {
+      return false;
+    }
+
     let mut running_total_chunk_time = Duration::from_secs(0);
     let mut running_total_test_time = Duration::from_secs(0);
     let mut running_total_tests_run = 0;
@@ -163,10 +170,16 @@ impl TestHistory {
       self.chunks.back_mut().unwrap().total_function_calls += 1;
     }
 
+    if result {
+      self.currently_inside_test = true;
+    }
+
     result
   }
 
   pub fn observe_test(&mut self, test_time: Duration, result: Result<(), String>) {
+    self.currently_inside_test = false;
+
     self.update_chunks();
     let chunk = self.chunks.back_mut().unwrap();
     chunk.total_test_time += test_time;
