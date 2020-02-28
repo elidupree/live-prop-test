@@ -7,3 +7,4 @@ edition = "2018"
 [dependencies]
 live-prop-test-macros = { path = "../live-prop-test-macros", version = "0.1" }
 rand = "0.7.3"
+log = "0.4"

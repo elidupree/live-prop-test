@@ -1,12 +1,25 @@
 use rand::random;
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[doc(inline)]
 pub use live_prop_test_macros::live_prop_test;
 
-pub fn init_for_regression_tests() {}
+pub fn init_for_regression_tests() {
+  set_panic_on_errors(true);
+  set_throttle_expensive_tests(false);
+  SUGGEST_REGRESSION_TESTS.store(false, Ordering::Relaxed);
+}
+
+pub fn set_panic_on_errors(setting: bool) {
+  ERRORS_PANIC.store(setting, Ordering::Relaxed);
+}
+
+pub fn set_throttle_expensive_tests(setting: bool) {
+  THROTTLE_EXPENSIVE_TESTS.store(setting, Ordering::Relaxed);
+}
 
 #[macro_export]
 macro_rules! lpt_assert {
@@ -68,6 +81,11 @@ macro_rules! lpt_assert_ne {
                      left, right $($args)*);
     }};
 }
+
+static THROTTLE_EXPENSIVE_TESTS: AtomicBool = AtomicBool::new(true);
+static ERRORS_PANIC: AtomicBool = AtomicBool::new(true);
+#[doc(hidden)]
+pub static SUGGEST_REGRESSION_TESTS: AtomicBool = AtomicBool::new(true);
 
 struct HistoryChunk {
   total_test_time: Duration,
@@ -136,7 +154,8 @@ impl TestHistory {
         }
       }
     }
-    let result = random::<f64>() < lowest_probability;
+    let result =
+      random::<f64>() < lowest_probability || !THROTTLE_EXPENSIVE_TESTS.load(Ordering::Relaxed);
 
     if !result {
       // if result is true, this update will be done in observe_test(),
@@ -155,7 +174,11 @@ impl TestHistory {
     chunk.total_tests_run += 1;
 
     if let Err(message) = result {
-      panic!("{}", message);
+      if ERRORS_PANIC.load(Ordering::Relaxed) {
+        panic!("{}", message);
+      } else {
+        log::error!("{}", message);
+      }
     }
   }
 

@@ -139,7 +139,8 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
           }
           write!(&mut assembled, "  Failure message: {}\n\n", message).unwrap();
           
-          write!(&mut assembled, "  Suggested regression test:\n
+          if live_prop_test::SUGGEST_REGRESSION_TESTS.load(std::sync::atomic::Ordering::Relaxed) {
+            write!(&mut assembled, "  Suggested regression test:\n
 // NOTE: This suggested code is provided as a convenience,
 // but it is not guaranteed to be correct, or even to compile.
 // Arguments are written as their Debug representations,
@@ -152,25 +153,24 @@ fn {}_regression() {{
   
 ", stringify! (#function_name)).unwrap();
 
-          const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-          for (name, value) in & argument_representations {
-            if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-              write!(&mut assembled, "  let {} = {};\n", name, value).unwrap();
+            const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
+            for (name, value) in & argument_representations {
+              if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+                write!(&mut assembled, "  let {} = {};\n", name, value).unwrap();
+             }
             }
-          }
-          write!(&mut assembled, "  {}(", stringify! (#function_name)).unwrap();
+            write!(&mut assembled, "  {}(", stringify! (#function_name)).unwrap();
           
-          let passed_arguments: Vec<& str> = argument_representations.iter().map (| (name, value) | {
-            if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-              name
-            }
-            else {
-              &**value
-            }
-          }).collect();
-          write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join (",")).unwrap();
-
-
+            let passed_arguments: Vec<& str> = argument_representations.iter().map (| (name, value) | {
+              if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+                name
+             }
+              else {
+                &**value
+              }
+            }).collect();
+           write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join (",")).unwrap();
+          }
           
           assembled
         });
