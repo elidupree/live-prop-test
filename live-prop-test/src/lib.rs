@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 #[doc(inline)]
 pub use live_prop_test_macros::live_prop_test;
 
+pub fn init_for_regression_tests() {}
+
 #[macro_export]
 macro_rules! lpt_assert {
     ($cond:expr) => {

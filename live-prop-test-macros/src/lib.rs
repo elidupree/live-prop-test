@@ -111,12 +111,12 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         history.roll_to_test()
       });
 
-      let test_info: std::option::Option<(_, std::time::Duration, std::vec::Vec<std::string::String>)> = if do_test {
+      let test_info: std::option::Option<(_, std::time::Duration, std::vec::Vec<(&str,std::string::String)>)> = if do_test {
         let start_time = std::time::Instant::now();
         let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
         let mut argument_representations = Vec::new();
         #(
-          argument_representations.push (format!("{:?}", #parameter_value_references_vec));
+          argument_representations.push ((stringify!(#parameter_values_vec), format!("{:?}", #parameter_value_references_vec)));
         ) *
         std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
       } else {
@@ -131,14 +131,46 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         let total_elapsed = elapsed + start_time.elapsed();
         
         let test_result = test_result.map_err(|message| {
-          let mut assembled: String = format! ("live-prop-test failure:\n  Function: {}\n  Test function: {}\n  Arguments:\n", stringify! (#function_name), stringify! (#test_function_path));
+          let mut assembled: String = format! ("live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n", module_path!(), stringify! (#function_name), stringify! (#test_function_path));
           
-          let mut iterator = argument_representations.iter();
           use std::fmt::Write;
-          #(
-            write!(&mut assembled, "    {}: {}\n", stringify!(#parameter_values_vec), iterator.next().unwrap()).unwrap();
-          ) *
-          write!(&mut assembled, "  Failure message: {}", message).unwrap();
+          for (name, value) in & argument_representations {
+            write!(&mut assembled, "    {}: {}\n", name, value).unwrap();
+          }
+          write!(&mut assembled, "  Failure message: {}\n\n", message).unwrap();
+          
+          write!(&mut assembled, "  Suggested regression test:\n
+// NOTE: This suggested code is provided as a convenience,
+// but it is not guaranteed to be correct, or even to compile.
+// Arguments are written as their Debug representations,
+// which may need to be changed to become valid code.
+// If the function observes any other data in addition to its arguments,
+// you'll need to code your own method of recording and replaying that data.
+#[test]
+fn {}_regression() {{
+  live_prop_test::init_for_regression_tests();
+  
+", stringify! (#function_name)).unwrap();
+
+          const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
+          for (name, value) in & argument_representations {
+            if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+              write!(&mut assembled, "  let {} = {};\n", name, value).unwrap();
+            }
+          }
+          write!(&mut assembled, "  {}(", stringify! (#function_name)).unwrap();
+          
+          let passed_arguments: Vec<& str> = argument_representations.iter().map (| (name, value) | {
+            if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+              name
+            }
+            else {
+              &**value
+            }
+          }).collect();
+          write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join (",")).unwrap();
+
+
           
           assembled
         });
