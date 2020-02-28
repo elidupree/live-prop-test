@@ -3,6 +3,7 @@ use live_prop_test_macros::live_prop_test;
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 
+#[derive(Debug)]
 struct TestTracker {
   runs: u64,
 }

@@ -39,6 +39,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
       where_clause,
       ..
     },
+    ident: function_name,
     ..
   } = sig;
 
@@ -85,7 +86,10 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     }
   }
 
-  quote!(
+  let parameter_values_vec: Vec<_> = parameter_values.iter().collect();
+  let parameter_value_references_vec: Vec<_> = parameter_value_references.iter().collect();
+
+  let result = quote!(
     #[cfg(not(debug_assertions))]
     #function
 
@@ -107,20 +111,38 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         history.roll_to_test()
       });
 
-      let test_info = if do_test {
+      let test_info: std::option::Option<(_, std::time::Duration, std::vec::Vec<std::string::String>)> = if do_test {
         let start_time = std::time::Instant::now();
         let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
-        std::option::Option::Some ((test_closure, start_time.elapsed()))
+        let mut argument_representations = Vec::new();
+        #(
+          argument_representations.push (format!("{:?}", #parameter_value_references_vec));
+        ) *
+        std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
       } else {
         std::option::Option::None
       };
 
       let result = original::<#generic_parameter_values>(#parameter_values);
 
-      if let std::option::Option::Some ((test_closure, elapsed)) = test_info{
+      if let std::option::Option::Some ((test_closure, elapsed, argument_representations)) = test_info{
         let start_time = std::time::Instant::now();
         let test_result: Result<(), String> = (test_closure)(&result);
         let total_elapsed = elapsed + start_time.elapsed();
+        
+        let test_result = test_result.map_err(|message| {
+          let mut assembled: String = format! ("live-prop-test failure:\n  Function: {}\n  Test function: {}\n  Arguments:\n", stringify! (#function_name), stringify! (#test_function_path));
+          
+          let mut iterator = argument_representations.iter();
+          use std::fmt::Write;
+          #(
+            write!(&mut assembled, "    {}: {}\n", stringify!(#parameter_values_vec), iterator.next().unwrap()).unwrap();
+          ) *
+          write!(&mut assembled, "  Failure message: {}", message).unwrap();
+          
+          assembled
+        });
+
         HISTORY.with (move | history | {
           let mut history = history.borrow_mut();
           history.observe_test (total_elapsed, test_result);
@@ -130,5 +152,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
       result
     }
   )
-  .into()
+  .into();
+  //eprintln!("{}", result);
+  result
 }
