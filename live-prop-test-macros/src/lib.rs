@@ -2,9 +2,9 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 //use proc_macro2::Span;
-use quote::{quote, quote_spanned};
+use quote::{quote, quote_spanned, ToTokens};
 use syn::{
-  parse_quote, punctuated::Punctuated, spanned::Spanned, AttributeArgs, Expr, FnArg,
+  parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, AttributeArgs, Expr, FnArg,
   GenericArgument, GenericParam, ItemFn, Meta, NestedMeta, Pat, PatIdent, Signature, Token,
 };
 
@@ -32,6 +32,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     constness,
     unsafety,
     asyncness,
+    abi,
     inputs: parameters,
     output: return_type,
     generics: syn::Generics {
@@ -50,19 +51,31 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     return quote_spanned! {asyncness.span=> compile_error! ("live-prop-test doesn't support testing async fn items");}.into();
   }
 
+  let mut parameters = parameters.clone();
   let mut parameter_values: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut parameter_value_references: Punctuated<Expr, Token![,]> = Punctuated::new();
+  let mut parameter_value_representations: Vec<Expr> = Vec::new();
 
-  for parameter in parameters {
-    let parameter_value = match parameter {
-      FnArg::Receiver(_) => parse_quote! {self},
+  for parameter in parameters.iter_mut() {
+    let (parameter_value, attrs) = match parameter {
+      FnArg::Receiver(receiver) => (parse_quote! {self}, &mut receiver.attrs),
       FnArg::Typed(pat_type) => {
         match &*pat_type.pat {
-          Pat::Ident(PatIdent { ident, .. }) => parse_quote! {#ident},
+          Pat::Ident(PatIdent { ident, .. }) => (parse_quote! {#ident}, &mut pat_type.attrs),
           pat => return quote_spanned! {pat.span()=> compile_error! ("live-prop-test only supports function arguments that are bound as an identifier");}.into()
         }
       }
     };
+    let config = match gather_argument_config(attrs) {
+      Ok(config) => config,
+      Err(err) => return quote! (#err).into(),
+    };
+
+    if config.no_debug {
+      parameter_value_representations.push(parse_quote! { "<Debug impl unavailable>".to_string() })
+    } else {
+      parameter_value_representations.push(parse_quote! { format!("{:?}", &#parameter_value) })
+    }
     parameter_value_references.push(parse_quote! {& #parameter_value});
     parameter_values.push(parameter_value);
   }
@@ -87,15 +100,17 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
   }
 
   let parameter_values_vec: Vec<_> = parameter_values.iter().collect();
-  let parameter_value_references_vec: Vec<_> = parameter_value_references.iter().collect();
 
   let result = quote!(
     #[cfg(not(debug_assertions))]
-    #function
+    // note: we can't just say #function because we do still need to purge any live_prop_test config attributes from the arguments
+    #(#attrs) *
+    #vis #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
+    #block
 
     #[cfg(debug_assertions)]
     #(#attrs) *
-    #vis #sig
+    #vis #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
     {
       // Note: not applying `attrs` here; I'm not aware of any attribute that would matter on the inner function, and some things you could theoretically apply – like #[test] – only make sense on the outer function
       #unsafety fn original<#generic_parameters> (#parameters) #return_type
@@ -116,7 +131,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
         let mut argument_representations = Vec::new();
         #(
-          argument_representations.push ((stringify!(#parameter_values_vec), format!("{:?}", #parameter_value_references_vec)));
+          argument_representations.push ((stringify!(#parameter_values_vec), #parameter_value_representations));
         ) *
         std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
       } else {
@@ -187,4 +202,46 @@ fn {}_regression() {{
   .into();
   //eprintln!("{}", result);
   result
+}
+
+struct ArgumentConfig {
+  no_debug: bool,
+  pass_through: bool,
+}
+
+fn gather_argument_config(attrs: &mut Vec<Attribute>) -> Result<ArgumentConfig, impl ToTokens> {
+  let mut result = ArgumentConfig {
+    no_debug: false,
+    pass_through: false,
+  };
+
+  for attr in attrs.iter_mut() {
+    if attr.path.is_ident("live_prop_test") {
+      let arguments: Punctuated<Meta, Token![,]> = attr
+        .parse_args_with(Punctuated::parse_terminated)
+        .map_err(|e| e.to_compile_error())?;
+      for argument in arguments {
+        let mut valid = false;
+        if let Meta::Path(path) = &argument {
+          if path.is_ident("no_debug") {
+            result.no_debug = true;
+            valid = true;
+          }
+          if path.is_ident("pass_through") {
+            result.pass_through = true;
+            valid = true;
+          }
+        }
+        if !valid {
+          return Err(
+            quote_spanned! {argument.span()=> compile_error!("unrecognized argument to #[live_prop_test(...)] on function argument; valid arguments are `no_debug` and `pass_through`")},
+          );
+        }
+      }
+    }
+  }
+
+  attrs.retain(|attr| !attr.path.is_ident("live_prop_test"));
+
+  Ok(result)
 }

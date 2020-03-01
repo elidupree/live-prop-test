@@ -35,7 +35,7 @@ fn test_exp2_wrong_fails() {
 }
 
 #[live_prop_test(generic_inferred_test)]
-fn generic_inferred_function<T: Debug>(_input: &T) {}
+fn generic_inferred_function<T: Debug>(_input: T) {}
 
 fn generic_inferred_test<T: Debug>(_input: &T) -> impl FnOnce(&()) -> Result<(), String> {
   move |_result| Ok(())
@@ -43,7 +43,7 @@ fn generic_inferred_test<T: Debug>(_input: &T) -> impl FnOnce(&()) -> Result<(),
 
 #[test]
 fn generic_inferred() {
-  generic_inferred_function(&4);
+  generic_inferred_function(4);
 }
 
 #[live_prop_test(generic_explicit_test)]
@@ -56,4 +56,16 @@ fn generic_explicit_test<T: Default>() -> impl FnOnce(&()) -> Result<(), String>
 #[test]
 fn generic_explicit() {
   generic_explicit_function::<i32>();
+}
+
+#[live_prop_test(no_debug_test)]
+fn no_debug_function<T>(#[live_prop_test(no_debug)] _input: T) {}
+
+fn no_debug_test<T>(_input: &T) -> impl FnOnce(&()) -> Result<(), String> {
+  move |_result| Ok(())
+}
+
+#[test]
+fn no_debug() {
+  no_debug_function(4);
 }
