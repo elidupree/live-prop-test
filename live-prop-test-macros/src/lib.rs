@@ -83,9 +83,10 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     };
 
     if config.no_debug {
-      parameter_value_representations.push(parse_quote! { "<Debug impl unavailable>".to_string() })
+      parameter_value_representations.push(parse_quote! { <() as NoDebugFallback>::represent(&()) })
     } else {
-      parameter_value_representations.push(parse_quote! { format!("{:?}", &#parameter_value) })
+      parameter_value_representations
+        .push(parse_quote! { MaybeDebug(&#parameter_value).represent() })
     }
     parameter_value_references.push(parse_quote! {& #parameter_value});
     parameter_values.push(parameter_value);
@@ -142,9 +143,19 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         let start_time = std::time::Instant::now();
         let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
         let mut argument_representations = Vec::new();
+        
+        trait NoDebugFallback {
+          fn represent(&self)->std::string::String {std::string::String::from("<Debug impl unavailable>")}
+        }
+        impl<T> NoDebugFallback for T {}
+        struct MaybeDebug<T>(T);
+        impl<T: std::fmt::Debug> MaybeDebug<T> {
+          fn represent(&self)->std::string::String {format!("{:?}", &self.0)}
+        }
         #(
           argument_representations.push (#parameter_value_representations);
         ) *
+
         std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
       } else {
         std::option::Option::None

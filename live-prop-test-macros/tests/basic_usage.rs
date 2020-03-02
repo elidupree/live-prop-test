@@ -29,7 +29,9 @@ fn test_exp2_works() {
 }
 
 #[test]
-#[should_panic(expected = "assertion failed: `(left == right)`")]
+#[should_panic(expected = "  Arguments:
+    exponent: 4
+  Failure message: assertion failed: `(left == right)`")]
 fn test_exp2_wrong_fails() {
   exp2_wrong(4);
 }
@@ -58,14 +60,28 @@ fn generic_explicit() {
   generic_explicit_function::<i32>();
 }
 
-#[live_prop_test(no_debug_test)]
-fn no_debug_function<T>(#[live_prop_test(no_debug)] _input: T) {}
+#[live_prop_test(implicit_no_debug_test)]
+fn implicit_no_debug_function<T>(_input: T) {}
 
-fn no_debug_test<T>(_input: &T) -> impl FnOnce(&()) -> Result<(), String> {
-  move |_result| Ok(())
+fn implicit_no_debug_test<T>(_input: &T) -> impl FnOnce(&()) -> Result<(), String> {
+  move |_result| Err("Fail".to_string())
 }
 
 #[test]
-fn no_debug() {
-  no_debug_function(4);
+#[should_panic(expected = "<Debug impl unavailable>")]
+fn implicit_no_debug() {
+  implicit_no_debug_function(4);
+}
+
+#[live_prop_test(explicit_no_debug_test)]
+fn explicit_no_debug_function(#[live_prop_test(no_debug)] _input: i32) {}
+
+fn explicit_no_debug_test(_input: &i32) -> impl FnOnce(&()) -> Result<(), String> {
+  move |_result| Err("Fail".to_string())
+}
+
+#[test]
+#[should_panic(expected = "<Debug impl unavailable>")]
+fn explicit_no_debug() {
+  explicit_no_debug_function(4);
 }
