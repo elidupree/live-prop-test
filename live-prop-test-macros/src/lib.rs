@@ -5,7 +5,7 @@ use proc_macro::TokenStream;
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{
   parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, AttributeArgs, Expr, FnArg,
-  GenericArgument, GenericParam, ItemFn, Meta, NestedMeta, Pat, PatIdent, Signature, Token,
+  GenericArgument, GenericParam, ItemFn, Meta, NestedMeta, Pat, PatIdent, Signature, Token, Type,
 };
 
 #[proc_macro_attribute]
@@ -55,13 +55,24 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
   let mut parameter_values: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut parameter_value_references: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut parameter_value_representations: Vec<Expr> = Vec::new();
+  let mut parameter_regression_prefixes: Vec<Expr> = Vec::new();
 
   for parameter in parameters.iter_mut() {
-    let (parameter_value, attrs) = match parameter {
-      FnArg::Receiver(receiver) => (parse_quote! {self}, &mut receiver.attrs),
+    let (parameter_value, attrs, prefix): (_, _, &str) = match parameter {
+      FnArg::Receiver(receiver) => (parse_quote! {self}, &mut receiver.attrs, ""),
       FnArg::Typed(pat_type) => {
+        let prefix = match &*pat_type.ty {
+          Type::Reference(reference) => {
+            if reference.mutability.is_some() {
+              "&mut "
+            } else {
+              "&"
+            }
+          }
+          _ => "",
+        };
         match &*pat_type.pat {
-          Pat::Ident(PatIdent { ident, .. }) => (parse_quote! {#ident}, &mut pat_type.attrs),
+          Pat::Ident(PatIdent { ident, .. }) => (parse_quote! {#ident}, &mut pat_type.attrs, prefix),
           pat => return quote_spanned! {pat.span()=> compile_error! ("live-prop-test only supports function arguments that are bound as an identifier");}.into()
         }
       }
@@ -78,6 +89,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     }
     parameter_value_references.push(parse_quote! {& #parameter_value});
     parameter_values.push(parameter_value);
+    parameter_regression_prefixes.push(parse_quote! {#prefix });
   }
 
   let mut generic_parameter_values: Punctuated<GenericArgument, Token! [,]> = Punctuated::new();
@@ -126,12 +138,12 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         history.roll_to_test()
       });
 
-      let test_info: std::option::Option<(_, std::time::Duration, std::vec::Vec<(&str,std::string::String)>)> = if do_test {
+      let test_info: std::option::Option<(_, std::time::Duration, std::vec::Vec<std::string::String>)> = if do_test {
         let start_time = std::time::Instant::now();
         let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
         let mut argument_representations = Vec::new();
         #(
-          argument_representations.push ((stringify!(#parameter_values_vec), #parameter_value_representations));
+          argument_representations.push (#parameter_value_representations);
         ) *
         std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
       } else {
@@ -148,8 +160,13 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         let test_result = test_result.map_err(|message| {
           let mut assembled: String = format! ("live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n", module_path!(), stringify! (#function_name), stringify! (#test_function_path));
           
+          let mut argument_extra: Vec<(&str, &str)> = Vec::new();
+          #(
+            argument_extra.push ((stringify!(#parameter_values_vec), #parameter_regression_prefixes));
+          ) *
+          
           use std::fmt::Write;
-          for (name, value) in & argument_representations {
+          for (value, (name,_)) in argument_representations.iter().zip (& argument_extra) {
             write!(&mut assembled, "    {}: {}\n", name, value).unwrap();
           }
           write!(&mut assembled, "  Failure message: {}\n\n", message).unwrap();
@@ -169,20 +186,21 @@ fn {}_regression() {{
 ", stringify! (#function_name)).unwrap();
 
             const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-            for (name, value) in & argument_representations {
+            for (value, (name,_)) in argument_representations.iter().zip (& argument_extra) {
               if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
                 write!(&mut assembled, "  let {} = {};\n", name, value).unwrap();
              }
             }
             write!(&mut assembled, "  {}(", stringify! (#function_name)).unwrap();
           
-            let passed_arguments: Vec<& str> = argument_representations.iter().map (| (name, value) | {
-              if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+            let passed_arguments: Vec<String> = argument_representations.iter().zip (& argument_extra).map (| (value, (name, prefix)) | {
+              let owned = if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
                 name
-             }
+              }
               else {
                 &**value
-              }
+              };
+              format! ("{}{}", prefix, owned)
             }).collect();
            write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join (",")).unwrap();
           }
