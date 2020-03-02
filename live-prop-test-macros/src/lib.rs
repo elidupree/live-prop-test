@@ -113,6 +113,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
   }
 
   let parameter_values_vec: ::std::vec::Vec<_> = parameter_values.iter().collect();
+  let num_parameters = parameter_values.len();
 
   let result = quote!(
     #[cfg(not(debug_assertions))]
@@ -139,10 +140,9 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         history.roll_to_test()
       });
 
-      let test_info: ::std::option::Option<(_, ::std::time::Duration, ::std::vec::Vec<::std::string::String>)> = if do_test {
+      let test_info: ::std::option::Option<(_, ::std::time::Duration, [::std::string::String; #num_parameters])> = if do_test {
         let start_time = ::std::time::Instant::now();
         let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
-        let mut argument_representations = ::std::vec::Vec::new();
         
         trait NoDebugFallback {
           fn represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
@@ -152,9 +152,9 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         impl<T: ::std::fmt::Debug> MaybeDebug<T> {
           fn represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
         }
-        #(
-          argument_representations.push (#parameter_value_representations);
-        ) *
+        let argument_representations = [#(
+          #parameter_value_representations
+        ),*];
 
         ::std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
       } else {
