@@ -29,8 +29,8 @@ macro_rules! lpt_assert {
 
     ($cond:expr, $($fmt:tt)*) => {
         if !$cond {
-            let message = format!($($fmt)*);
-            let message = format!("{} at {}:{}", message, file!(), line!());
+            let message = ::std::format!($($fmt)*);
+            let message = ::std::format!("{} at {}:{}", message, file!(), line!());
             return ::std::result::Result::Err(message);
         }
     };

@@ -112,7 +112,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
     }
   }
 
-  let parameter_values_vec: Vec<_> = parameter_values.iter().collect();
+  let parameter_values_vec: ::std::vec::Vec<_> = parameter_values.iter().collect();
 
   let result = quote!(
     #[cfg(not(debug_assertions))]
@@ -129,9 +129,9 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
       #unsafety fn original<#generic_parameters> (#parameters) #return_type
       #where_clause
       #block
-
-      std::thread_local! {
-        static HISTORY: std::cell::RefCell<live_prop_test::TestHistory> = std::cell::RefCell::new(live_prop_test::TestHistory::new());
+        
+      ::std::thread_local! {
+        static HISTORY: ::std::cell::RefCell<::live_prop_test::TestHistory> = ::std::cell::RefCell::new(::live_prop_test::TestHistory::new());
       }
 
       let do_test = HISTORY.with (| history | {
@@ -139,51 +139,51 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         history.roll_to_test()
       });
 
-      let test_info: std::option::Option<(_, std::time::Duration, std::vec::Vec<std::string::String>)> = if do_test {
-        let start_time = std::time::Instant::now();
+      let test_info: ::std::option::Option<(_, ::std::time::Duration, ::std::vec::Vec<::std::string::String>)> = if do_test {
+        let start_time = ::std::time::Instant::now();
         let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
-        let mut argument_representations = Vec::new();
+        let mut argument_representations = ::std::vec::Vec::new();
         
         trait NoDebugFallback {
-          fn represent(&self)->std::string::String {std::string::String::from("<Debug impl unavailable>")}
+          fn represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
         }
         impl<T> NoDebugFallback for T {}
         struct MaybeDebug<T>(T);
-        impl<T: std::fmt::Debug> MaybeDebug<T> {
-          fn represent(&self)->std::string::String {format!("{:?}", &self.0)}
+        impl<T: ::std::fmt::Debug> MaybeDebug<T> {
+          fn represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
         }
         #(
           argument_representations.push (#parameter_value_representations);
         ) *
 
-        std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
+        ::std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
       } else {
-        std::option::Option::None
+        ::std::option::Option::None
       };
 
       let result = original::<#generic_parameter_values>(#parameter_values);
 
-      if let std::option::Option::Some ((test_closure, elapsed, argument_representations)) = test_info{
-        let start_time = std::time::Instant::now();
-        let test_result: Result<(), String> = (test_closure)(&result);
+      if let ::std::option::Option::Some ((test_closure, elapsed, argument_representations)) = test_info{
+        let start_time = ::std::time::Instant::now();
+        let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(&result);
         let total_elapsed = elapsed + start_time.elapsed();
         
         let test_result = test_result.map_err(|message| {
-          let mut assembled: String = format! ("live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n", module_path!(), stringify! (#function_name), stringify! (#test_function_path));
+          let mut assembled: ::std::string::String = ::std::format! ("live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n", module_path!(), ::std::stringify! (#function_name), ::std::stringify! (#test_function_path));
           
-          let mut argument_extra: Vec<(&str, &str)> = Vec::new();
+          let mut argument_extra: ::std::vec::Vec<(&str, &str)> = ::std::vec::Vec::new();
           #(
             argument_extra.push ((stringify!(#parameter_values_vec), #parameter_regression_prefixes));
           ) *
           
-          use std::fmt::Write;
-          for (value, (name,_)) in argument_representations.iter().zip (& argument_extra) {
-            write!(&mut assembled, "    {}: {}\n", name, value).unwrap();
-          }
-          write!(&mut assembled, "  Failure message: {}\n\n", message).unwrap();
           
-          if live_prop_test::SUGGEST_REGRESSION_TESTS.load(std::sync::atomic::Ordering::Relaxed) {
-            write!(&mut assembled, "  Suggested regression test:\n
+          for (value, (name,_)) in ::std::iter::Iterator::zip(argument_representations.iter(), & argument_extra) {
+            <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("    {}: {}\n", name, value)).unwrap();
+          }
+          <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("  Failure message: {}\n\n", message)).unwrap();
+          
+          if ::live_prop_test::SUGGEST_REGRESSION_TESTS.load(::std::sync::atomic::Ordering::Relaxed) {
+            <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("  Suggested regression test:\n
 // NOTE: This suggested code is provided as a convenience,
 // but it is not guaranteed to be correct, or even to compile.
 // Arguments are written as their Debug representations,
@@ -194,26 +194,26 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
 fn {}_regression() {{
   live_prop_test::init_for_regression_tests();
   
-", stringify! (#function_name)).unwrap();
+", ::std::stringify! (#function_name))).unwrap();
 
             const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-            for (value, (name,_)) in argument_representations.iter().zip (& argument_extra) {
+            for (value, (name,_)) in ::std::iter::Iterator::zip(argument_representations.iter(), & argument_extra) {
               if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-                write!(&mut assembled, "  let {} = {};\n", name, value).unwrap();
+                <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("  let {} = {};\n", name, value)).unwrap();
              }
             }
-            write!(&mut assembled, "  {}(", stringify! (#function_name)).unwrap();
+            <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("  {}(", ::std::stringify! (#function_name))).unwrap();
           
-            let passed_arguments: Vec<String> = argument_representations.iter().zip (& argument_extra).map (| (value, (name, prefix)) | {
+            let passed_arguments: ::std::vec::Vec<::std::string::String> = ::std::iter::Iterator::collect (::std::iter::Iterator::map(::std::iter::Iterator::zip(argument_representations.iter(), & argument_extra), | (value, (name, prefix)) | {
               let owned = if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
                 name
               }
               else {
                 &**value
               };
-              format! ("{}{}", prefix, owned)
-            }).collect();
-           write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join (",")).unwrap();
+              ::std::format! ("{}{}", prefix, owned)
+            }));
+           <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("{});\n}}\n\n", passed_arguments.join (","))).unwrap();
           }
           
           assembled

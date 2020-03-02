@@ -1,5 +1,7 @@
-use live_prop_test::{live_prop_test, lpt_assert_eq};
-use std::fmt::Debug;
+// Don't `use` anything, to guarantee that the macros work without pre-existing `use`s
+#![no_implicit_prelude]
+
+use ::live_prop_test::{live_prop_test, lpt_assert_eq};
 
 #[live_prop_test(test_exp2)]
 fn exp2(exponent: i32) -> i32 {
@@ -11,15 +13,18 @@ fn exp2_wrong(exponent: i32) -> i32 {
   2 << exponent
 }
 
-fn test_exp2<'a>(exponent: &'a i32) -> impl FnOnce(&i32) -> Result<(), String> + 'a {
+fn test_exp2<'a>(
+  exponent: &'a i32,
+) -> impl ::std::ops::FnOnce(&i32) -> ::std::result::Result<(), ::std::string::String> + 'a {
   move |power| {
     lpt_assert_eq!(
       *power,
-      std::iter::repeat(2)
-        .take(*exponent as usize)
-        .product::<i32>()
+      ::std::iter::Iterator::product::<i32>(::std::iter::Iterator::take(
+        ::std::iter::repeat(2),
+        *exponent as usize
+      ))
     );
-    Ok(())
+    ::std::result::Result::Ok(())
   }
 }
 
@@ -37,10 +42,12 @@ fn test_exp2_wrong_fails() {
 }
 
 #[live_prop_test(generic_inferred_test)]
-fn generic_inferred_function<T: Debug>(_input: T) {}
+fn generic_inferred_function<T: ::std::fmt::Debug>(_input: T) {}
 
-fn generic_inferred_test<T: Debug>(_input: &T) -> impl FnOnce(&()) -> Result<(), String> {
-  move |_result| Ok(())
+fn generic_inferred_test<T: ::std::fmt::Debug>(
+  _input: &T,
+) -> impl ::std::ops::FnOnce(&()) -> ::std::result::Result<(), ::std::string::String> {
+  move |_result| ::std::result::Result::Ok(())
 }
 
 #[test]
@@ -49,10 +56,11 @@ fn generic_inferred() {
 }
 
 #[live_prop_test(generic_explicit_test)]
-fn generic_explicit_function<T: Default>() {}
+fn generic_explicit_function<T: ::std::default::Default>() {}
 
-fn generic_explicit_test<T: Default>() -> impl FnOnce(&()) -> Result<(), String> {
-  move |_result| Ok(())
+fn generic_explicit_test<T: ::std::default::Default>(
+) -> impl ::std::ops::FnOnce(&()) -> ::std::result::Result<(), ::std::string::String> {
+  move |_result| ::std::result::Result::Ok(())
 }
 
 #[test]
@@ -63,8 +71,14 @@ fn generic_explicit() {
 #[live_prop_test(implicit_no_debug_test)]
 fn implicit_no_debug_function<T>(_input: T) {}
 
-fn implicit_no_debug_test<T>(_input: &T) -> impl FnOnce(&()) -> Result<(), String> {
-  move |_result| Err("Fail".to_string())
+fn implicit_no_debug_test<T>(
+  _input: &T,
+) -> impl ::std::ops::FnOnce(&()) -> ::std::result::Result<(), ::std::string::String> {
+  move |_result| {
+    ::std::result::Result::Err(<::std::string::String as ::std::convert::From<&str>>::from(
+      "Fail",
+    ))
+  }
 }
 
 #[test]
@@ -76,8 +90,14 @@ fn implicit_no_debug() {
 #[live_prop_test(explicit_no_debug_test)]
 fn explicit_no_debug_function(#[live_prop_test(no_debug)] _input: i32) {}
 
-fn explicit_no_debug_test(_input: &i32) -> impl FnOnce(&()) -> Result<(), String> {
-  move |_result| Err("Fail".to_string())
+fn explicit_no_debug_test(
+  _input: &i32,
+) -> impl ::std::ops::FnOnce(&()) -> ::std::result::Result<(), ::std::string::String> {
+  move |_result| {
+    ::std::result::Result::Err(<::std::string::String as ::std::convert::From<&str>>::from(
+      "Fail",
+    ))
+  }
 }
 
 #[test]
