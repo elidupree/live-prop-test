@@ -116,6 +116,13 @@ fn exp2_field(#[live_prop_test(pass_through)] object: &mut Fielded) {
   object.field = 2 << object.field
 }
 
+impl Fielded {
+  #[live_prop_test(test_exp2_field)]
+  fn exp2_field(#[live_prop_test(pass_through)] &mut self) {
+    self.field = 2 << self.field
+  }
+}
+
 fn test_exp2_field<'a>(
   object: &Fielded,
 ) -> impl ::std::ops::FnOnce(&Fielded, &()) -> ::std::result::Result<(), ::std::string::String> + 'a
@@ -139,4 +146,12 @@ fn test_exp2_field<'a>(
   Failure message: assertion failed: `(left == right)`")]
 fn test_exp2_field_fails() {
   exp2_field(&mut Fielded { field: 4 });
+}
+
+#[test]
+#[should_panic(expected = "  Arguments:
+    self: Fielded { field: 4 }
+  Failure message: assertion failed: `(left == right)`")]
+fn test_exp2_field_with_self_fails() {
+  (Fielded { field: 4 }).exp2_field();
 }

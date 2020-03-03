@@ -5,7 +5,8 @@ use proc_macro::TokenStream;
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{
   parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, AttributeArgs, Expr, FnArg,
-  GenericArgument, GenericParam, ItemFn, Meta, NestedMeta, Pat, PatIdent, Signature, Token, Type,
+  GenericArgument, GenericParam, Ident, ItemFn, Meta, NestedMeta, Pat, PatIdent, Signature, Token,
+  Type,
 };
 
 #[proc_macro_attribute]
@@ -120,23 +121,30 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
 
   let parameter_values_vec: ::std::vec::Vec<_> = parameter_values.iter().collect();
   let num_parameters = parameter_values.len();
+  let name_for_inner_function = Ident::new(
+    &format!("__live_prop_test_original_function_for_{}", function_name),
+    function_name.span(),
+  );
 
   let result = quote!(
     #[cfg(not(debug_assertions))]
     // note: we can't just say #function because we do still need to purge any live_prop_test config attributes from the arguments
     #(#attrs) *
     #vis #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
+    #where_clause
+    #block
+    
+    #[cfg(debug_assertions)]
+    #(#attrs) *
+    #vis #unsafety #abi fn #name_for_inner_function<#generic_parameters> (#parameters) #return_type
+    #where_clause
     #block
 
     #[cfg(debug_assertions)]
     #(#attrs) *
     #vis #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
+    #where_clause
     {
-      // Note: not applying `attrs` here; I'm not aware of any attribute that would matter on the inner function, and some things you could theoretically apply – like #[test] – only make sense on the outer function
-      #unsafety fn original<#generic_parameters> (#parameters) #return_type
-      #where_clause
-      #block
-        
       ::std::thread_local! {
         static HISTORY: ::std::cell::RefCell<::live_prop_test::TestHistory> = ::std::cell::RefCell::new(::live_prop_test::TestHistory::new());
       }
@@ -167,7 +175,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         ::std::option::Option::None
       };
 
-      let result = original::<#generic_parameter_values>(#parameter_values);
+      let result = #name_for_inner_function::<#generic_parameter_values>(#parameter_values);
 
       if let ::std::option::Option::Some ((test_closure, elapsed, argument_representations)) = test_info{
         let start_time = ::std::time::Instant::now();
