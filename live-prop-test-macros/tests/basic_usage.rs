@@ -105,3 +105,35 @@ fn explicit_no_debug_test(
 fn explicit_no_debug() {
   explicit_no_debug_function(4);
 }
+
+#[derive(Debug)]
+struct Fielded {
+  field: i32,
+}
+
+#[live_prop_test(test_exp2_field)]
+fn exp2_field(#[live_prop_test(pass_through)] object: &mut Fielded) {
+  object.field = 2 << object.field
+}
+
+fn test_exp2_field<'a>(
+  object: &Fielded,
+) -> impl ::std::ops::FnOnce(&Fielded, &()) -> ::std::result::Result<(), ::std::string::String> + 'a
+{
+  let old_value = object.field;
+  move |object, _| {
+    lpt_assert_eq!(
+      object.field,
+      ::std::iter::Iterator::product::<i32>(::std::iter::Iterator::take(
+        ::std::iter::repeat(2),
+        old_value as usize
+      ))
+    );
+    ::std::result::Result::Ok(())
+  }
+}
+
+#[test]
+fn test_exp2_field_works() {
+  exp2_field(&mut Fielded { field: 4 });
+}

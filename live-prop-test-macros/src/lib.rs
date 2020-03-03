@@ -53,12 +53,13 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
 
   let mut parameters = parameters.clone();
   let mut parameter_values: Punctuated<Expr, Token![,]> = Punctuated::new();
+  let mut pass_through_values: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut parameter_value_references: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut parameter_value_representations: Vec<Expr> = Vec::new();
   let mut parameter_regression_prefixes: Vec<Expr> = Vec::new();
 
   for parameter in parameters.iter_mut() {
-    let (parameter_value, attrs, prefix): (_, _, &str) = match parameter {
+    let (parameter_value, attrs, prefix): (Expr, _, &str) = match parameter {
       FnArg::Receiver(receiver) => (parse_quote! {self}, &mut receiver.attrs, ""),
       FnArg::Typed(pat_type) => {
         let prefix = match &*pat_type.ty {
@@ -89,9 +90,14 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
         .push(parse_quote! { MaybeDebug(&#parameter_value).represent() })
     }
     parameter_value_references.push(parse_quote! {& #parameter_value});
+    if config.pass_through {
+      pass_through_values.push(parameter_value.clone());
+    }
     parameter_values.push(parameter_value);
     parameter_regression_prefixes.push(parse_quote! {#prefix });
   }
+
+  pass_through_values.push(parse_quote! {&result});
 
   let mut generic_parameter_values: Punctuated<GenericArgument, Token! [,]> = Punctuated::new();
 
@@ -165,7 +171,7 @@ pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream 
 
       if let ::std::option::Option::Some ((test_closure, elapsed, argument_representations)) = test_info{
         let start_time = ::std::time::Instant::now();
-        let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(&result);
+        let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
         let total_elapsed = elapsed + start_time.elapsed();
         
         let test_result = test_result.map_err(|message| {
