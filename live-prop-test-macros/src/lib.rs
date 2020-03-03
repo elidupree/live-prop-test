@@ -5,29 +5,42 @@ use proc_macro::TokenStream;
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{
   parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, AttributeArgs, Expr, FnArg,
-  GenericArgument, GenericParam, Ident, ItemFn, Meta, NestedMeta, Pat, PatIdent, Signature, Token,
-  Type,
+  GenericArgument, GenericParam, Ident, ItemFn, ItemImpl, Meta, NestedMeta, Pat, PatIdent, Path,
+  Signature, Token, Type,
 };
 
 #[proc_macro_attribute]
-pub fn live_prop_test(arguments: TokenStream, item: TokenStream) -> TokenStream {
-  let function: ItemFn = syn::parse_macro_input!(item as ItemFn);
-  let arguments = syn::parse_macro_input!(arguments as AttributeArgs);
+pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream {
+  if let Ok(function) = syn::parse::<ItemFn>(input.clone()) {
+    let arguments = syn::parse_macro_input!(arguments as AttributeArgs);
+    let test_function_path = match arguments.as_slice() {
+      [NestedMeta::Meta(Meta::Path(path))] => {
+        path
+      }
+      _ => return quote! {compile_error! ("#[live_prop_test] on fn item requires exactly one argument, the name of the test function");}.into(),
+    };
 
-  let test_function_path = match arguments.as_slice() {
-    [NestedMeta::Meta(Meta::Path(path))] => {
-      path
-    }
-    _ => return quote! {compile_error! ("live_prop_test attribute requires one argument, the name of the test function")}.into(),
-  };
+    live_prop_test_function(&function, &test_function_path, None)
+  } else if let Ok(impl_block) = syn::parse::<ItemImpl>(input) {
+    unimplemented!()
+  } else {
+    // TODO: why doesn't this compile when I remove `return`?
+    return quote! {compile_error! ("#[live_prop_test] can only be applied to a fn item (or impl block)");}.into();
+  }
+}
 
+fn live_prop_test_function(
+  function: &ItemFn,
+  test_function_path: &Path,
+  containing_impl: Option<&ItemImpl>,
+) -> TokenStream {
   let ItemFn {
     attrs,
     vis,
     sig,
     block,
     ..
-  } = &function;
+  } = function;
 
   let Signature {
     constness,
