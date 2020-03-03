@@ -134,6 +134,9 @@ fn test_exp2_field<'a>(
 }
 
 #[test]
-fn test_exp2_field_works() {
+#[should_panic(expected = "  Arguments:
+    object: Fielded { field: 4 }
+  Failure message: assertion failed: `(left == right)`")]
+fn test_exp2_field_fails() {
   exp2_field(&mut Fielded { field: 4 });
 }
