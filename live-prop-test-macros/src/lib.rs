@@ -272,98 +272,69 @@ fn live_prop_test_function(
           static HISTORY: ::std::cell::RefCell<::live_prop_test::TestHistory> = ::std::cell::RefCell::new(::live_prop_test::TestHistory::new());
         }
 
-        let do_test = HISTORY.with (| history | {
-          let mut history = history.borrow_mut();
-          history.roll_to_test()
-        });
+        HISTORY.with (| history | {
+          // always ignore recursive calls, so nothing weird happens if you call the function from inside the test (e.g. to test that it is commutative)
+          let do_test = if let ::std::result::Result::Ok(mut history) = history.try_borrow_mut() {
+            history.roll_to_test()
+          } else {
+            false
+          };
 
-        let test_info: ::std::option::Option<(_, ::std::time::Duration, [::std::string::String; #num_parameters])> = if do_test {
-          let start_time = ::std::time::Instant::now();
-          let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
+          let test_info: ::std::option::Option<(_, ::std::time::Duration, [::std::string::String; #num_parameters])> = if do_test {
+            let start_time = ::std::time::Instant::now();
+            let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
 
-          trait NoDebugFallback {
-            // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
-            fn __live_prop_test_represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
-          }
-          impl<T> NoDebugFallback for T {}
-          struct MaybeDebug<T>(T);
-          impl<T: ::std::fmt::Debug> MaybeDebug<T> {
-            fn __live_prop_test_represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
-          }
-          let argument_representations = [#(
-            #parameter_value_representations
-          ),*];
-
-          ::std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
-        } else {
-          ::std::option::Option::None
-        };
-
-        let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
-
-        if let ::std::option::Option::Some ((test_closure, elapsed, argument_representations)) = test_info{
-          let start_time = ::std::time::Instant::now();
-          let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
-          let total_elapsed = elapsed + start_time.elapsed();
-
-          let test_result = test_result.map_err(|message| {
-            let mut assembled: ::std::string::String = ::std::format! ("live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n", module_path!(), ::std::stringify! (#function_name), ::std::stringify! (#test_function_path));
-
-            let mut argument_extra: ::std::vec::Vec<(&str, &str)> = ::std::vec::Vec::new();
-            #(
-              argument_extra.push ((stringify!(#parameter_values_vec), #parameter_regression_prefixes));
-            ) *
-
-
-            for (value, (name,_)) in ::std::iter::Iterator::zip(argument_representations.iter(), & argument_extra) {
-              <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("    {}: {}\n", name, value)).unwrap();
+            trait NoDebugFallback {
+              // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
+              fn __live_prop_test_represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
             }
-            <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("  Failure message: {}\n\n", message)).unwrap();
-
-            if ::live_prop_test::SUGGEST_REGRESSION_TESTS.load(::std::sync::atomic::Ordering::Relaxed) {
-              <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("  Suggested regression test:\n
-// NOTE: This suggested code is provided as a convenience,
-// but it is not guaranteed to be correct, or even to compile.
-// Arguments are written as their Debug representations,
-// which may need to be changed to become valid code.
-// If the function observes any other data in addition to its arguments,
-// you'll need to code your own method of recording and replaying that data.
-#[test]
-fn {}_regression() {{
-  live_prop_test::init_for_regression_tests();
-  
-", ::std::stringify! (#function_name))).unwrap();
-
-              const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-              for (value, (name,_)) in ::std::iter::Iterator::zip(argument_representations.iter(), & argument_extra) {
-                if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-                  <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("  let {} = {};\n", name, value)).unwrap();
-               }
-              }
-              <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("  {}(", ::std::stringify! (#function_name))).unwrap();
-
-              let passed_arguments: ::std::vec::Vec<::std::string::String> = ::std::iter::Iterator::collect (::std::iter::Iterator::map(::std::iter::Iterator::zip(argument_representations.iter(), & argument_extra), | (value, (name, prefix)) | {
-                let owned = if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-                  name
-                }
-                else {
-                  &**value
-                };
-                ::std::format! ("{}{}", prefix, owned)
-              }));
-             <::std::string::String as ::std::fmt::Write>::write_fmt(&mut assembled, ::std::format_args! ("{});\n}}\n\n", passed_arguments.join (","))).unwrap();
+            impl<T> NoDebugFallback for T {}
+            struct MaybeDebug<T>(T);
+            impl<T: ::std::fmt::Debug> MaybeDebug<T> {
+              fn __live_prop_test_represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
             }
+            let argument_representations = [#(
+              #parameter_value_representations
+            ),*];
 
-            assembled
-          });
+            ::std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
+          } else {
+            ::std::option::Option::None
+          };
 
-          HISTORY.with (move | history | {
+          let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
+
+          if let ::std::option::Option::Some ((test_closure, elapsed, argument_representations)) = test_info {
             let mut history = history.borrow_mut();
-            history.observe_test (total_elapsed, test_result);
-          });
-        }
+            let start_time = ::std::time::Instant::now();
+            let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
+            let total_elapsed = elapsed + start_time.elapsed();
 
-        result
+            // TODO: Refactor this so it can be an array instead of Vec and doesn't need an iterator thingy
+            let mut iter = ::std::iter::IntoIterator::into_iter (&argument_representations);
+            let mut argument_representations = ::std::vec::Vec::new();
+              #(
+                argument_representations.push (::live_prop_test::TestArgumentRepresentation {
+                  name: ::std::stringify!(#parameter_values_vec),
+                  value: <::std::string::String as ::std::convert::From::<&str>>::from(::std::iter::Iterator::next(&mut iter).unwrap()),
+                  prefix: #parameter_regression_prefixes,
+                });
+              ) *
+
+            ::live_prop_test::TestHistory::resolve_tests (
+              &mut [&mut *history],
+              ::std::module_path!(),
+              ::std::stringify! (#function_name),
+              & argument_representations,
+              & [::live_prop_test::TestResult {
+                test_function_path: ::std::stringify!(#test_function_path),
+                total_time_taken: total_elapsed,
+                result: test_result,
+              }],
+            );
+          }
+          result
+        })
       }
     ),
   ];

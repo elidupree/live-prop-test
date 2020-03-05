@@ -1,6 +1,7 @@
 use rand::random;
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -101,11 +102,24 @@ pub struct TestHistory {
   chunks: VecDeque<HistoryChunk>,
   start_time: Instant,
   earliest_remembered_chunk_index: usize,
-  currently_inside_test: bool,
 }
 
 thread_local! {
   static NUM_TEST_FUNCTIONS: RefCell<u64> = RefCell::new(0);
+}
+
+#[doc(hidden)]
+pub struct TestResult {
+  pub test_function_path: &'static str,
+  pub total_time_taken: Duration,
+  pub result: Result<(), String>,
+}
+
+#[doc(hidden)]
+pub struct TestArgumentRepresentation {
+  pub name: &'static str,
+  pub value: String,
+  pub prefix: &'static str,
 }
 
 impl TestHistory {
@@ -115,15 +129,9 @@ impl TestHistory {
       earliest_remembered_chunk_index: 0,
       start_time: Instant::now(),
       chunks: VecDeque::with_capacity(MAX_REMEMBERED_CHUNKS),
-      currently_inside_test: false,
     }
   }
   pub fn roll_to_test(&mut self) -> bool {
-    // always ignore recursive calls, so nothing weird happens if you call the function from inside the test (e.g. to test that it is commutative)
-    if self.currently_inside_test {
-      return false;
-    }
-
     let mut running_total_chunk_time = Duration::from_secs(0);
     let mut running_total_test_time = Duration::from_secs(0);
     let mut running_total_tests_run = 0;
@@ -170,29 +178,7 @@ impl TestHistory {
       self.chunks.back_mut().unwrap().total_function_calls += 1;
     }
 
-    if result {
-      self.currently_inside_test = true;
-    }
-
     result
-  }
-
-  pub fn observe_test(&mut self, test_time: Duration, result: Result<(), String>) {
-    self.currently_inside_test = false;
-
-    self.update_chunks();
-    let chunk = self.chunks.back_mut().unwrap();
-    chunk.total_test_time += test_time;
-    chunk.total_function_calls += 1;
-    chunk.total_tests_run += 1;
-
-    if let Err(message) = result {
-      if ERRORS_PANIC.load(Ordering::Relaxed) {
-        panic!("{}", message);
-      } else {
-        log::error!("{}", message);
-      }
-    }
   }
 
   fn chunk_index(since_start: Duration) -> usize {
@@ -225,5 +211,99 @@ impl TestHistory {
       });
     }
     assert!(self.chunks.len() <= MAX_REMEMBERED_CHUNKS);
+  }
+
+  pub fn resolve_tests(
+    histories: &mut [&mut TestHistory],
+    function_module_path: &'static str,
+    function_name: &'static str,
+    arguments: &[TestArgumentRepresentation],
+    test_results: &[TestResult],
+  ) {
+    for (history, test_result) in histories.iter_mut().zip(test_results) {
+      history.update_chunks();
+      let chunk = history.chunks.back_mut().unwrap();
+      chunk.total_test_time += test_result.total_time_taken;
+      chunk.total_function_calls += 1;
+      chunk.total_tests_run += 1;
+    }
+
+    let failure_messages: Vec<_> = test_results
+      .iter()
+      .filter_map(|test_result| {
+        test_result.result.as_ref().err().map(|message| {
+          let mut assembled: String = format!(
+            "live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n",
+            function_module_path, function_name, test_result.test_function_path
+          );
+          for argument in arguments {
+            write!(
+              &mut assembled,
+              "    {}: {}\n",
+              argument.name, argument.value
+            )
+            .unwrap();
+          }
+          write!(&mut assembled, "  Failure message: {}\n\n", message).unwrap();
+
+          if SUGGEST_REGRESSION_TESTS.load(Ordering::Relaxed) {
+            write!(
+              &mut assembled,
+              "  Suggested regression test:\n
+// NOTE: This suggested code is provided as a convenience,
+// but it is not guaranteed to be correct, or even to compile.
+// Arguments are written as their Debug representations,
+// which may need to be changed to become valid code.
+// If the function observes any other data in addition to its arguments,
+// you'll need to code your own method of recording and replaying that data.
+#[test]
+fn {}_regression() {{
+  live_prop_test::init_for_regression_tests();
+  
+",
+              function_name
+            )
+            .unwrap();
+
+            const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
+            for argument in arguments {
+              if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+                write!(
+                  &mut assembled,
+                  "  let {} = {};\n",
+                  argument.name, argument.value
+                )
+                .unwrap();
+              }
+            }
+            write!(&mut assembled, "  {}(", function_name).unwrap();
+
+            let passed_arguments: Vec<String> = arguments
+              .iter()
+              .map(|argument| {
+                let owned = if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+                  argument.name
+                } else {
+                  &*argument.value
+                };
+                format!("{}{}", argument.prefix, owned)
+              })
+              .collect();
+            write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
+          }
+
+          assembled
+        })
+      })
+      .collect();
+
+    if failure_messages.len() > 0 {
+      let combined_message = failure_messages.join("");
+      if ERRORS_PANIC.load(Ordering::Relaxed) {
+        panic!("{}", combined_message);
+      } else {
+        log::error!("{}", combined_message);
+      }
+    }
   }
 }
