@@ -1,5 +1,5 @@
-error: expected `fn`
- --> $DIR/not_fn.rs:4:1
+error: #[live_prop_test] can only be applied to a fn item, an impl item, or an argument in the signature of a fn that also has the attribute
+ --> $DIR/not_fn.rs:3:1
   |
-4 | struct NotAFunction;
-  | ^^^^^^
+3 | #[live_prop_test]
+  | ^^^^^^^^^^^^^^^^^

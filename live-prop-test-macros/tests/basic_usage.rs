@@ -116,9 +116,22 @@ fn exp2_field(#[live_prop_test(pass_through)] object: &mut Fielded) {
   object.field = 2 << object.field
 }
 
+#[live_prop_test]
 impl Fielded {
   #[live_prop_test(test_exp2_field)]
   fn exp2_field(#[live_prop_test(pass_through)] &mut self) {
+    self.field = 2 << self.field
+  }
+}
+
+trait Exp2Field {
+  fn exp2_field_trait_method(&mut self);
+}
+
+#[live_prop_test]
+impl Exp2Field for Fielded {
+  #[live_prop_test(test_exp2_field)]
+  fn exp2_field_trait_method(#[live_prop_test(pass_through)] &mut self) {
     self.field = 2 << self.field
   }
 }
@@ -152,6 +165,14 @@ fn test_exp2_field_fails() {
 #[should_panic(expected = "  Arguments:
     self: Fielded { field: 4 }
   Failure message: assertion failed: `(left == right)`")]
-fn test_exp2_field_with_self_fails() {
+fn test_exp2_field_inherent_method_fails() {
   (Fielded { field: 4 }).exp2_field();
+}
+
+#[test]
+#[should_panic(expected = "  Arguments:
+    self: Fielded { field: 4 }
+  Failure message: assertion failed: `(left == right)`")]
+fn test_exp2_field_trait_method_fails() {
+  (Fielded { field: 4 }).exp2_field_trait_method();
 }
