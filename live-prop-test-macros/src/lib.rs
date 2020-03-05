@@ -176,10 +176,11 @@ fn live_prop_test_function(
     let config = gather_argument_config(attrs)?;
 
     if config.no_debug {
-      parameter_value_representations.push(parse_quote! { <() as NoDebugFallback>::represent(&()) })
+      parameter_value_representations
+        .push(parse_quote! { <() as NoDebugFallback>::__live_prop_test_represent(&()) })
     } else {
       parameter_value_representations
-        .push(parse_quote! { MaybeDebug(&#parameter_value).represent() })
+        .push(parse_quote! { MaybeDebug(&#parameter_value).__live_prop_test_represent() })
     }
     parameter_value_references.push(parse_quote! {& #parameter_value});
     if config.pass_through {
@@ -281,12 +282,13 @@ fn live_prop_test_function(
           let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
 
           trait NoDebugFallback {
-            fn represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
+            // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
+            fn __live_prop_test_represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
           }
           impl<T> NoDebugFallback for T {}
           struct MaybeDebug<T>(T);
           impl<T: ::std::fmt::Debug> MaybeDebug<T> {
-            fn represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
+            fn __live_prop_test_represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
           }
           let argument_representations = [#(
             #parameter_value_representations
