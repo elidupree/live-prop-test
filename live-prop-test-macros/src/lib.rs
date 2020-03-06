@@ -5,8 +5,8 @@ use proc_macro2::Span;
 use quote::{quote, quote_spanned};
 use syn::{
   parse::Parser, parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, Expr, FnArg,
-  GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod, ItemImpl, Meta, NestedMeta, Pat,
-  PatIdent, Signature, Token, Type,
+  GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod, Index, ItemImpl, Meta,
+  NestedMeta, Pat, PatIdent, Signature, Token, Type,
 };
 
 /// caveat about Self and generic parameters of the containing impl
@@ -242,6 +242,12 @@ fn live_prop_test_function(
     })
     .collect();
   let test_function_indices: Vec<_> = (0..num_test_functions).collect();
+  let test_function_tuple_indices: Vec<_> = (0..num_test_functions as u32)
+    .map(|index| Index {
+      index,
+      span: Span::call_site(),
+    })
+    .collect();
   //let parameter_indices: Vec<_> = (0..num_parameters).collect();
 
   // note that because the inner function is defined inside the outer function, it doesn't pollute the outer namespace, but we are still obligated to avoid polluting the inner namespace, so we give it a name that won't collide by coincidence
@@ -355,7 +361,7 @@ fn live_prop_test_function(
               if let ::std::option::Option::Some ((argument_representations, tests_info)) = test_info {
                 let mut history = history.borrow_mut();
     //#test_function_indices
-                let test_results = [#(tests_info.0.map(|(earlier_time_taken, test_closure)| {
+                let test_results = [#(tests_info.#test_function_tuple_indices.map(|(earlier_time_taken, test_closure)| {
                   let start_time = ::std::time::Instant::now();
                   let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
                   let total_time_taken = earlier_time_taken + start_time.elapsed();
