@@ -1,19 +1,18 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-//use proc_macro2::Span;
+use proc_macro2::Span;
 use quote::{quote, quote_spanned};
 use syn::{
-  parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, AttributeArgs, Expr, FnArg,
+  parse::Parser, parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, Expr, FnArg,
   GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod, ItemImpl, Meta, NestedMeta, Pat,
-  PatIdent, Path, Signature, Token, Type,
+  PatIdent, Signature, Token, Type,
 };
 
 /// caveat about Self and generic parameters of the containing impl
 #[proc_macro_attribute]
 pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream {
-  let arguments = syn::parse_macro_input!(arguments as AttributeArgs);
-  let result = match live_prop_test_impl(&arguments, input) {
+  let result = match live_prop_test_impl(arguments, input) {
     Ok(tokens) => tokens,
     Err(err) => err,
   };
@@ -22,21 +21,15 @@ pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream
 }
 
 fn live_prop_test_impl(
-  arguments: &AttributeArgs,
+  arguments: TokenStream,
   input: TokenStream,
 ) -> Result<TokenStream, TokenStream> {
   if let Ok(function) = syn::parse::<ImplItemMethod>(input.clone()) {
-    let test_function_path = match arguments.as_slice() {
-      [NestedMeta::Meta(Meta::Path(path))] => {
-        path
-      }
-      _ => return Err(quote! {compile_error! ("#[live_prop_test] on fn item requires exactly one argument, the name of the test function");}.into()),
-    };
-
-    //let attrs = &function.attrs;
-    //eprintln!("{:?}", quote!(#(#attrs) *));
-
-    let replacement = live_prop_test_function(&function, &test_function_path, None)?;
+    let attr_arguments: Punctuated<NestedMeta, Token![,]> = Punctuated::parse_terminated
+      .parse(arguments)
+      .map_err(|e| e.to_compile_error())?;
+    let replacement =
+      live_prop_test_function(&function, vec![(attr_arguments, Span::call_site())], None)?;
     Ok(quote! {#(#replacement) *}.into())
   } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input) {
     // TODO require no arguments
@@ -55,19 +48,14 @@ fn live_prop_test_impl(
     for item in items {
       match item {
         ImplItem::Method(method) => {
-          for attr in &method.attrs {
-            if attr.path.is_ident("live_prop_test") {
-              let arguments: Punctuated<Meta, Token![,]> = attr
-                .parse_args_with(Punctuated::parse_terminated)
-                .map_err(|e| e.to_compile_error())?;
-              // TODO: proper handling of multiple arguments/multiple attrs
-              if let Some(Meta::Path(test_function_path)) = arguments.first() {
-                let replacement =
-                  live_prop_test_function(method, test_function_path, Some(&item_impl))?;
-                for method in replacement {
-                  new_items.push(ImplItem::Method(method));
-                }
-              }
+          if method
+            .attrs
+            .iter()
+            .any(|attr| attr.path.is_ident("live_prop_test"))
+          {
+            let replacement = live_prop_test_function(method, Vec::new(), Some(&item_impl))?;
+            for method in replacement {
+              new_items.push(ImplItem::Method(method));
             }
           }
         }
@@ -93,7 +81,7 @@ fn live_prop_test_impl(
 
 fn live_prop_test_function(
   function: &ImplItemMethod,
-  test_function_path: &Path,
+  captured_attribute_arguments: Vec<(Punctuated<NestedMeta, Token![,]>, Span)>,
   containing_impl: Option<&ItemImpl>,
 ) -> Result<Vec<ImplItemMethod>, TokenStream> {
   let ImplItemMethod {
@@ -104,6 +92,31 @@ fn live_prop_test_function(
     block,
     ..
   } = function;
+
+  let mut arguments = captured_attribute_arguments;
+  for attr in attrs {
+    if attr.path.is_ident("live_prop_test") {
+      let attr_arguments: Punctuated<NestedMeta, Token![,]> = attr
+        .parse_args_with(Punctuated::parse_terminated)
+        .map_err(|e| e.to_compile_error())?;
+      arguments.push((attr_arguments, attr.span()));
+    }
+  }
+
+  let mut test_function_paths = Vec::new();
+  for (attr_arguments, attr_span) in arguments {
+    if attr_arguments.is_empty() {
+      return Err(quote_spanned! {attr_span=> compile_error! ("#[live_prop_test] attribute on fn item expects an argument (name or path of one or more test functions)");}.into());
+    }
+    for argument in attr_arguments {
+      match argument {
+      NestedMeta::Meta(Meta::Path(path)) => {
+        test_function_paths.push (path);
+      }
+      _ => return Err(quote_spanned! {argument.span()=> compile_error! ("#[live_prop_test] argument must be name or path of test function");}.into()),
+    }
+    }
+  }
 
   let mut attrs = attrs.clone();
   attrs.retain(|attr| !attr.path.is_ident("live_prop_test"));
@@ -211,8 +224,25 @@ fn live_prop_test_function(
     }
   }
 
-  let parameter_values_vec: ::std::vec::Vec<_> = parameter_values.iter().collect();
+  let parameter_values_vec: Vec<_> = parameter_values.iter().collect();
   let num_parameters = parameter_values.len();
+  let num_test_functions = test_function_paths.len();
+  let test_history_initializers: Punctuated<Expr, Token![,]> = test_function_paths
+    .iter()
+    .map(|_| {
+      let expression: Expr = parse_quote!(::live_prop_test::TestHistory::new());
+      expression
+    })
+    .collect();
+  let test_info_types: Vec<Type> = test_function_paths
+    .iter()
+    .map(|_| {
+      let t: Type = parse_quote!(::std::option::Option<(::std::time::Duration, _)>);
+      t
+    })
+    .collect();
+  let test_function_indices: Vec<_> = (0..num_test_functions).collect();
+  //let parameter_indices: Vec<_> = (0..num_parameters).collect();
 
   // note that because the inner function is defined inside the outer function, it doesn't pollute the outer namespace, but we are still obligated to avoid polluting the inner namespace, so we give it a name that won't collide by coincidence
   let name_for_inner_function = Ident::new(
@@ -261,82 +291,104 @@ fn live_prop_test_function(
 
     ),
     parse_quote!(
-      #[cfg(debug_assertions)]
-      #(#attrs) *
-      #vis #defaultness #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
-      #where_clause
-      {
-        #inner_function_definition
+          #[cfg(debug_assertions)]
+          #(#attrs) *
+          #vis #defaultness #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
+          #where_clause
+          {
+            #inner_function_definition
 
-        ::std::thread_local! {
-          static HISTORY: ::std::cell::RefCell<::live_prop_test::TestHistory> = ::std::cell::RefCell::new(::live_prop_test::TestHistory::new());
-        }
-
-        HISTORY.with (| history | {
-          // always ignore recursive calls, so nothing weird happens if you call the function from inside the test (e.g. to test that it is commutative)
-          let do_test = if let ::std::result::Result::Ok(mut history) = history.try_borrow_mut() {
-            history.roll_to_test()
-          } else {
-            false
-          };
-
-          let test_info: ::std::option::Option<(_, ::std::time::Duration, [::std::string::String; #num_parameters])> = if do_test {
-            let start_time = ::std::time::Instant::now();
-            let test_closure = #test_function_path::<#generic_parameter_values>(#parameter_value_references);
-
-            trait NoDebugFallback {
-              // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
-              fn __live_prop_test_represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
+            ::std::thread_local! {
+              static HISTORY: ::std::cell::RefCell<[::live_prop_test::TestHistory; #num_test_functions]> = ::std::cell::RefCell::new([#test_history_initializers]);
             }
-            impl<T> NoDebugFallback for T {}
-            struct MaybeDebug<T>(T);
-            impl<T: ::std::fmt::Debug> MaybeDebug<T> {
-              fn __live_prop_test_represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
-            }
-            let argument_representations = [#(
-              #parameter_value_representations
-            ),*];
 
-            ::std::option::Option::Some ((test_closure, start_time.elapsed(), argument_representations))
-          } else {
-            ::std::option::Option::None
-          };
+            HISTORY.with (| history | {
+              // always ignore recursive calls, so nothing weird happens if you call the function from inside the test (e.g. to test that it is commutative)
+              let do_test = if let ::std::result::Result::Ok(mut history) = history.try_borrow_mut() {
+                [#(history[#test_function_indices].roll_to_test()),*]
+              } else {
+                [false; #num_test_functions]
+              };
 
-          let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
+              let test_info: ::std::option::Option<([::std::string::String; #num_parameters], (#(#test_info_types,)*))> = if ::std::iter::Iterator::all (&mut do_test.iter(), |a| !a) {
+                ::std::option::Option::None
+              } else {
+                let start_time = ::std::time::Instant::now();
 
-          if let ::std::option::Option::Some ((test_closure, elapsed, argument_representations)) = test_info {
-            let mut history = history.borrow_mut();
-            let start_time = ::std::time::Instant::now();
-            let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
-            let total_elapsed = elapsed + start_time.elapsed();
+                trait NoDebugFallback {
+                  // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
+                  fn __live_prop_test_represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
+                }
+                impl<T> NoDebugFallback for T {}
+                struct MaybeDebug<T>(T);
+                impl<T: ::std::fmt::Debug> MaybeDebug<T> {
+                  fn __live_prop_test_represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
+                }
+                let argument_representations = [#(
+                  #parameter_value_representations
+                ),*];
 
-            // TODO: Refactor this so it can be an array instead of Vec and doesn't need an iterator thingy
-            let mut iter = ::std::iter::IntoIterator::into_iter (&argument_representations);
-            let mut argument_representations = ::std::vec::Vec::new();
-              #(
-                argument_representations.push (::live_prop_test::TestArgumentRepresentation {
-                  name: ::std::stringify!(#parameter_values_vec),
-                  value: <::std::string::String as ::std::convert::From::<&str>>::from(::std::iter::Iterator::next(&mut iter).unwrap()),
-                  prefix: #parameter_regression_prefixes,
-                });
-              ) *
+                // note: the argument rendering duration is potentially multi-counted
+                // (one for each test function)
+                // this is intentional, as the simplest way
+                let argument_rendering_duration = start_time.elapsed();
 
-            ::live_prop_test::TestHistory::resolve_tests (
-              &mut [&mut *history],
-              ::std::module_path!(),
-              ::std::stringify! (#function_name),
-              & argument_representations,
-              & [::live_prop_test::TestResult {
-                test_function_path: ::std::stringify!(#test_function_path),
-                total_time_taken: total_elapsed,
-                result: test_result,
-              }],
-            );
+                let test_closures_etc = (
+                  #(
+                    if !do_test [#test_function_indices] {
+                      ::std::option::Option::None
+                    } else {
+                      let start_time = ::std::time::Instant::now();
+                      let test_closure = #test_function_paths::<#generic_parameter_values>(#parameter_value_references);
+                      let closure_generating_duration = start_time.elapsed();
+                      ::std::option::Option::Some((argument_rendering_duration + closure_generating_duration, test_closure))
+                    },
+                  )*
+                );
+
+
+                ::std::option::Option::Some ((argument_representations, test_closures_etc))
+              };
+
+              let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
+
+              if let ::std::option::Option::Some ((argument_representations, tests_info)) = test_info {
+                let mut history = history.borrow_mut();
+    //#test_function_indices
+                let test_results = [#(tests_info.0.map(|(earlier_time_taken, test_closure)| {
+                  let start_time = ::std::time::Instant::now();
+                  let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
+                  let total_time_taken = earlier_time_taken + start_time.elapsed();
+                  ::live_prop_test::TestResult {
+                    test_function_path: ::std::stringify!(#test_function_paths),
+                    total_time_taken,
+                    result: test_result,
+                  }
+                })),*];
+
+                // TODO: Refactor this so it can be an array instead of Vec and doesn't need an iterator thingy
+                let mut iter = ::std::iter::IntoIterator::into_iter (&argument_representations);
+                let mut argument_representations = ::std::vec::Vec::new();
+                  #(
+                    argument_representations.push (::live_prop_test::TestArgumentRepresentation {
+                      name: ::std::stringify!(#parameter_values_vec),
+                      value: <::std::string::String as ::std::convert::From::<&str>>::from(::std::iter::Iterator::next(&mut iter).unwrap()),
+                      prefix: #parameter_regression_prefixes,
+                    });
+                  ) *
+
+                ::live_prop_test::TestHistory::resolve_tests (
+                  &mut [#(&mut history [#test_function_indices]),*],
+                  ::std::module_path!(),
+                  ::std::stringify! (#function_name),
+                  & argument_representations,
+                  & test_results,
+                );
+              }
+              result
+            })
           }
-          result
-        })
-      }
-    ),
+        ),
   ];
   //eprintln!("{}", result);
   Ok(result.into())

@@ -218,38 +218,41 @@ impl TestHistory {
     function_module_path: &'static str,
     function_name: &'static str,
     arguments: &[TestArgumentRepresentation],
-    test_results: &[TestResult],
+    test_results: &[Option<TestResult>],
   ) {
     for (history, test_result) in histories.iter_mut().zip(test_results) {
-      history.update_chunks();
-      let chunk = history.chunks.back_mut().unwrap();
-      chunk.total_test_time += test_result.total_time_taken;
-      chunk.total_function_calls += 1;
-      chunk.total_tests_run += 1;
+      if let Some(test_result) = test_result {
+        history.update_chunks();
+        let chunk = history.chunks.back_mut().unwrap();
+        chunk.total_test_time += test_result.total_time_taken;
+        chunk.total_function_calls += 1;
+        chunk.total_tests_run += 1;
+      }
     }
 
     let failure_messages: Vec<_> = test_results
       .iter()
       .filter_map(|test_result| {
-        test_result.result.as_ref().err().map(|message| {
-          let mut assembled: String = format!(
-            "live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n",
-            function_module_path, function_name, test_result.test_function_path
-          );
-          for argument in arguments {
-            write!(
-              &mut assembled,
-              "    {}: {}\n",
-              argument.name, argument.value
-            )
-            .unwrap();
-          }
-          write!(&mut assembled, "  Failure message: {}\n\n", message).unwrap();
+        test_result.as_ref().and_then(|test_result| {
+          test_result.result.as_ref().err().map(|message| {
+            let mut assembled: String = format!(
+              "live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n",
+              function_module_path, function_name, test_result.test_function_path
+            );
+            for argument in arguments {
+              write!(
+                &mut assembled,
+                "    {}: {}\n",
+                argument.name, argument.value
+              )
+              .unwrap();
+            }
+            write!(&mut assembled, "  Failure message: {}\n\n", message).unwrap();
 
-          if SUGGEST_REGRESSION_TESTS.load(Ordering::Relaxed) {
-            write!(
-              &mut assembled,
-              "  Suggested regression test:\n
+            if SUGGEST_REGRESSION_TESTS.load(Ordering::Relaxed) {
+              write!(
+                &mut assembled,
+                "  Suggested regression test:\n
 // NOTE: This suggested code is provided as a convenience,
 // but it is not guaranteed to be correct, or even to compile.
 // Arguments are written as their Debug representations,
@@ -261,38 +264,39 @@ fn {}_regression() {{
   live_prop_test::init_for_regression_tests();
   
 ",
-              function_name
-            )
-            .unwrap();
+                function_name
+              )
+              .unwrap();
 
-            const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-            for argument in arguments {
-              if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-                write!(
-                  &mut assembled,
-                  "  let {} = {};\n",
-                  argument.name, argument.value
-                )
-                .unwrap();
+              const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
+              for argument in arguments {
+                if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+                  write!(
+                    &mut assembled,
+                    "  let {} = {};\n",
+                    argument.name, argument.value
+                  )
+                  .unwrap();
+                }
               }
+              write!(&mut assembled, "  {}(", function_name).unwrap();
+
+              let passed_arguments: Vec<String> = arguments
+                .iter()
+                .map(|argument| {
+                  let owned = if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+                    argument.name
+                  } else {
+                    &*argument.value
+                  };
+                  format!("{}{}", argument.prefix, owned)
+                })
+                .collect();
+              write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
             }
-            write!(&mut assembled, "  {}(", function_name).unwrap();
 
-            let passed_arguments: Vec<String> = arguments
-              .iter()
-              .map(|argument| {
-                let owned = if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-                  argument.name
-                } else {
-                  &*argument.value
-                };
-                format!("{}{}", argument.prefix, owned)
-              })
-              .collect();
-            write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
-          }
-
-          assembled
+            assembled
+          })
         })
       })
       .collect();
