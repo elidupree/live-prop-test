@@ -3,7 +3,7 @@ use scopeguard::defer;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[doc(inline)]
@@ -208,9 +208,7 @@ pub struct TestHistory {
   earliest_remembered_chunk_index: usize,
 }
 
-thread_local! {
-  static NUM_TEST_FUNCTIONS: RefCell<u64> = RefCell::new(0);
-}
+static NUM_TEST_FUNCTIONS: AtomicU64 = AtomicU64::new(0);
 
 #[doc(hidden)]
 pub struct TestResult {
@@ -226,9 +224,15 @@ pub struct TestArgumentRepresentation {
   pub prefix: &'static str,
 }
 
+impl Drop for TestHistory {
+  fn drop(&mut self) {
+    NUM_TEST_FUNCTIONS.fetch_sub(1, Ordering::Relaxed);
+  }
+}
+
 impl TestHistory {
   pub fn new() -> TestHistory {
-    NUM_TEST_FUNCTIONS.with(|n| *n.borrow_mut() += 1);
+    NUM_TEST_FUNCTIONS.fetch_add(1, Ordering::Relaxed);
     TestHistory {
       earliest_remembered_chunk_index: 0,
       start_time: Instant::now(),
@@ -242,7 +246,7 @@ impl TestHistory {
     //let mut running_total_function_calls = 0;
     let mut lowest_probability = 1.0;
 
-    let target_time_fraction = 0.1 / NUM_TEST_FUNCTIONS.with(|n| *n.borrow()) as f64;
+    let target_time_fraction = 0.1 / NUM_TEST_FUNCTIONS.load(Ordering::Relaxed) as f64;
 
     self.update_chunks();
     for chunk in self.chunks.iter().rev() {
