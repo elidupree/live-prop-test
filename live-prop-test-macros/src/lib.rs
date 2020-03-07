@@ -248,6 +248,14 @@ fn live_prop_test_function(
       span: Span::call_site(),
     })
     .collect();
+  let test_function_identifiers: Vec<_> = (0..num_test_functions as u32)
+    .map(|index| {
+      Ident::new(
+        &format!("test_function_identifier_{}", index),
+        Span::call_site(),
+      )
+    })
+    .collect();
   //let parameter_indices: Vec<_> = (0..num_parameters).collect();
 
   // note that because the inner function is defined inside the outer function, it doesn't pollute the outer namespace, but we are still obligated to avoid polluting the inner namespace, so we give it a name that won't collide by coincidence
@@ -383,8 +391,10 @@ fn live_prop_test_function(
                     });
                   ) *
 
+                let [#(ref mut #test_function_identifiers,)*] = &mut *history;
+
                 ::live_prop_test::TestHistory::resolve_tests (
-                  &mut [#(&mut history [#test_function_indices]),*],
+                  &mut [#(#test_function_identifiers,)*],
                   ::std::module_path!(),
                   ::std::stringify! (#function_name),
                   & argument_representations,
