@@ -8,3 +8,4 @@ edition = "2018"
 live-prop-test-macros = { path = "../live-prop-test-macros", version = "0.1" }
 rand = "0.7.3"
 log = "0.4"
+scopeguard = "1.1"

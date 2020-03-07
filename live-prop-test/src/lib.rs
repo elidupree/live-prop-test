@@ -1,5 +1,6 @@
 use rand::random;
-use std::cell::RefCell;
+use scopeguard::defer;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,6 +82,109 @@ macro_rules! lpt_assert_ne {
              \n  left: `{:?}`,\n right: `{:?}`: ", $fmt),
                      left, right $($args)*);
     }};
+}
+
+pub struct TestsSetup {
+  any_tests_running: bool,
+}
+
+pub struct TestsFinisher<A> {
+  argument_representations: Option<(A, Duration)>,
+  failures: Vec<String>,
+}
+
+pub struct TestTemporaries<T> {
+  data: Option<TestTemporariesInner<T>>,
+}
+
+pub struct TestTemporariesInner<T> {
+  closure: T,
+  setup_time_taken: Duration,
+}
+
+thread_local! {
+  static EXECUTION_IS_INSIDE_TEST: Cell <bool> = Cell::new (false);
+}
+
+impl TestsSetup {
+  pub fn new() -> TestsSetup {
+    TestsSetup {
+      any_tests_running: false,
+    }
+  }
+  pub fn setup_test<T>(
+    &mut self,
+    history: &mut TestHistory,
+    setup: impl FnOnce() -> T,
+  ) -> TestTemporaries<T> {
+    let data = if EXECUTION_IS_INSIDE_TEST.with(|in_test| !in_test.get()) && history.roll_to_test()
+    {
+      self.any_tests_running = true;
+      let start_time = Instant::now();
+      let closure = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
+        in_test.set(true);
+        defer!(in_test.set(false));
+        (setup)()
+      });
+      Some(TestTemporariesInner {
+        closure,
+        setup_time_taken: start_time.elapsed(),
+      })
+    } else {
+      None
+    };
+    TestTemporaries { data }
+  }
+  pub fn finish_setup<A>(self, setup: impl FnOnce() -> A) -> TestsFinisher<A> {
+    let argument_representations = if self.any_tests_running {
+      let start_time = Instant::now();
+      let representations = (setup)();
+      Some((representations, start_time.elapsed()))
+    } else {
+      None
+    };
+
+    TestsFinisher {
+      argument_representations,
+      failures: Vec::new(),
+    }
+  }
+}
+
+impl<A> TestsFinisher<A> {
+  pub fn finish_test<T>(
+    &mut self,
+    history: &mut TestHistory,
+    temporaries: TestTemporaries<T>,
+    finish: impl FnOnce(T, &A) -> Result<(), String>,
+  ) {
+    if let Some((argument_representations, argument_rendering_time_taken)) =
+      &self.argument_representations
+    {
+      if let Some(TestTemporariesInner {
+        closure,
+        setup_time_taken,
+      }) = temporaries.data
+      {
+        let start_time = Instant::now();
+        let test_result = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
+          in_test.set(true);
+          defer!(in_test.set(false));
+          (finish)(closure, argument_representations)
+        });
+
+        let finishing_time_taken = start_time.elapsed();
+        let total_time_taken =
+          setup_time_taken + *argument_rendering_time_taken + finishing_time_taken;
+
+        if let Err(message) = test_result {
+          self.failures.push(message);
+        }
+      }
+    }
+  }
+
+  pub fn finish(self) {}
 }
 
 static THROTTLE_EXPENSIVE_TESTS: AtomicBool = AtomicBool::new(true);
