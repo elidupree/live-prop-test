@@ -265,7 +265,7 @@ fn live_prop_test_function(
   );
   let inner_function_definition = quote! {
     #(#attrs) *
-    #vis #unsafety #abi fn #name_for_inner_function<#generic_parameters> (#parameters) #return_type
+    #vis #unsafety fn #name_for_inner_function<#generic_parameters> (#parameters) #return_type
     #where_clause
     #block
   };
@@ -274,18 +274,16 @@ fn live_prop_test_function(
     None => (inner_function_definition, quote!(#name_for_inner_function)),
     Some(containing_impl) => {
       let ItemImpl {
-        attrs,
-        defaultness,
-        unsafety,
-        generics,
-        self_ty,
-        ..
+        generics, self_ty, ..
       } = containing_impl;
 
       (
         quote! {
-          #(#attrs) *
-          #defaultness #unsafety impl #generics #self_ty {
+          trait LivePropTestOriginalFunctionExt {
+            #unsafety fn #name_for_inner_function<#generic_parameters> (#parameters) #return_type
+                #where_clause;
+          }
+          impl #generics LivePropTestOriginalFunctionExt for #self_ty {
             #inner_function_definition
           }
         },
