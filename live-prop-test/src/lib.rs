@@ -187,7 +187,16 @@ impl<A> TestsFinisher<A> {
     }
   }
 
-  pub fn finish(self) {}
+  pub fn finish(self) {
+    if self.failures.len() > 0 {
+      let combined_message = self.failures.join("");
+      if ERRORS_PANIC.load(Ordering::Relaxed) {
+        panic!("{}", combined_message);
+      } else {
+        log::error!("{}", combined_message);
+      }
+    }
+  }
 }
 
 static THROTTLE_EXPENSIVE_TESTS: AtomicBool = AtomicBool::new(true);
