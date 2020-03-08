@@ -199,10 +199,79 @@ impl<A> TestsFinisher<A> {
   }
 }
 
+pub fn detailed_failure_message(
+  function_module_path: &str,
+  function_name: &str,
+  test_function_path: &str,
+  arguments: &[TestArgumentRepresentation],
+  failure_message: &str,
+) -> String {
+  let mut assembled: String = format!(
+    "live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n",
+    function_module_path, function_name, test_function_path
+  );
+  for argument in arguments {
+    write!(
+      &mut assembled,
+      "    {}: {}\n",
+      argument.name, argument.value
+    )
+    .unwrap();
+  }
+  write!(&mut assembled, "  Failure message: {}\n\n", failure_message).unwrap();
+
+  if SUGGEST_REGRESSION_TESTS.load(Ordering::Relaxed) {
+    write!(
+      &mut assembled,
+      "  Suggested regression test:\n
+// NOTE: This suggested code is provided as a convenience,
+// but it is not guaranteed to be correct, or even to compile.
+// Arguments are written as their Debug representations,
+// which may need to be changed to become valid code.
+// If the function observes any other data in addition to its arguments,
+// you'll need to code your own method of recording and replaying that data.
+#[test]
+fn {}_regression() {{
+  live_prop_test::init_for_regression_tests();
+  
+",
+      function_name
+    )
+    .unwrap();
+
+    const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
+    for argument in arguments {
+      if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+        write!(
+          &mut assembled,
+          "  let {} = {};\n",
+          argument.name, argument.value
+        )
+        .unwrap();
+      }
+    }
+    write!(&mut assembled, "  {}(", function_name).unwrap();
+
+    let passed_arguments: Vec<String> = arguments
+      .iter()
+      .map(|argument| {
+        let owned = if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+          argument.name
+        } else {
+          &*argument.value
+        };
+        format!("{}{}", argument.prefix, owned)
+      })
+      .collect();
+    write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
+  }
+
+  assembled
+}
+
 static THROTTLE_EXPENSIVE_TESTS: AtomicBool = AtomicBool::new(true);
 static ERRORS_PANIC: AtomicBool = AtomicBool::new(true);
-#[doc(hidden)]
-pub static SUGGEST_REGRESSION_TESTS: AtomicBool = AtomicBool::new(true);
+static SUGGEST_REGRESSION_TESTS: AtomicBool = AtomicBool::new(true);
 
 struct HistoryChunk {
   total_test_time: Duration,
@@ -213,7 +282,6 @@ struct HistoryChunk {
 const CHUNK_DURATION: Duration = Duration::from_millis(1);
 const MAX_REMEMBERED_CHUNKS: usize = (1_000_000_000.0 / CHUNK_DURATION.as_nanos() as f64) as usize;
 
-#[doc(hidden)]
 pub struct TestHistory {
   chunks: VecDeque<HistoryChunk>,
   start_time: Instant,
@@ -355,67 +423,13 @@ impl TestHistory {
       .filter_map(|test_result| {
         test_result.as_ref().and_then(|test_result| {
           test_result.result.as_ref().err().map(|message| {
-            let mut assembled: String = format!(
-              "live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n",
-              function_module_path, function_name, test_result.test_function_path
-            );
-            for argument in arguments {
-              write!(
-                &mut assembled,
-                "    {}: {}\n",
-                argument.name, argument.value
-              )
-              .unwrap();
-            }
-            write!(&mut assembled, "  Failure message: {}\n\n", message).unwrap();
-
-            if SUGGEST_REGRESSION_TESTS.load(Ordering::Relaxed) {
-              write!(
-                &mut assembled,
-                "  Suggested regression test:\n
-// NOTE: This suggested code is provided as a convenience,
-// but it is not guaranteed to be correct, or even to compile.
-// Arguments are written as their Debug representations,
-// which may need to be changed to become valid code.
-// If the function observes any other data in addition to its arguments,
-// you'll need to code your own method of recording and replaying that data.
-#[test]
-fn {}_regression() {{
-  live_prop_test::init_for_regression_tests();
-  
-",
-                function_name
-              )
-              .unwrap();
-
-              const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-              for argument in arguments {
-                if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-                  write!(
-                    &mut assembled,
-                    "  let {} = {};\n",
-                    argument.name, argument.value
-                  )
-                  .unwrap();
-                }
-              }
-              write!(&mut assembled, "  {}(", function_name).unwrap();
-
-              let passed_arguments: Vec<String> = arguments
-                .iter()
-                .map(|argument| {
-                  let owned = if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-                    argument.name
-                  } else {
-                    &*argument.value
-                  };
-                  format!("{}{}", argument.prefix, owned)
-                })
-                .collect();
-              write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
-            }
-
-            assembled
+            detailed_failure_message(
+              function_module_path,
+              function_name,
+              test_result.test_function_path,
+              arguments,
+              &message,
+            )
           })
         })
       })
