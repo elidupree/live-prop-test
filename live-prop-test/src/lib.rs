@@ -1,6 +1,6 @@
 use rand::random;
 use scopeguard::defer;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -172,8 +172,13 @@ impl<A> TestsFinisher<A> {
         });
 
         let finishing_time_taken = start_time.elapsed();
-        let total_time_taken =
-          setup_time_taken + *argument_rendering_time_taken + finishing_time_taken;
+        let total_time_taken = setup_time_taken + *shared_setup_time_taken + finishing_time_taken;
+
+        history.update_chunks();
+        let chunk = history.chunks.back_mut().unwrap();
+        chunk.total_test_time += total_time_taken;
+        chunk.total_function_calls += 1;
+        chunk.total_tests_run += 1;
 
         if let Err(message) = test_result {
           self.failures.push(message);
