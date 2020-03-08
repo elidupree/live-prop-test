@@ -1,6 +1,6 @@
 use rand::random;
 use scopeguard::defer;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -114,10 +114,11 @@ impl TestsSetup {
   }
   pub fn setup_test<T>(
     &mut self,
-    history: &mut TestHistory,
+    history: &TestHistory,
     test_setup: impl FnOnce() -> T,
   ) -> TestTemporaries<T> {
-    let data = if EXECUTION_IS_INSIDE_TEST.with(|in_test| !in_test.get()) && history.roll_to_test()
+    let data = if EXECUTION_IS_INSIDE_TEST.with(|in_test| !in_test.get())
+      && history.cell.borrow_mut().roll_to_test()
     {
       self.any_tests_running = true;
       let start_time = Instant::now();
@@ -154,7 +155,7 @@ impl TestsSetup {
 impl<A> TestsFinisher<A> {
   pub fn finish_test<T>(
     &mut self,
-    history: &mut TestHistory,
+    history: &TestHistory,
     temporaries: TestTemporaries<T>,
     finish: impl FnOnce(T, &A) -> Result<(), String>,
   ) {
@@ -174,6 +175,7 @@ impl<A> TestsFinisher<A> {
         let finishing_time_taken = start_time.elapsed();
         let total_time_taken = setup_time_taken + *shared_setup_time_taken + finishing_time_taken;
 
+        let mut history = history.cell.borrow_mut();
         history.update_chunks();
         let chunk = history.chunks.back_mut().unwrap();
         chunk.total_test_time += total_time_taken;
@@ -283,6 +285,10 @@ const CHUNK_DURATION: Duration = Duration::from_millis(1);
 const MAX_REMEMBERED_CHUNKS: usize = (1_000_000_000.0 / CHUNK_DURATION.as_nanos() as f64) as usize;
 
 pub struct TestHistory {
+  cell: RefCell<TestHistoryInner>,
+}
+
+struct TestHistoryInner {
   chunks: VecDeque<HistoryChunk>,
   start_time: Instant,
   earliest_remembered_chunk_index: usize,
@@ -304,7 +310,7 @@ pub struct TestArgumentRepresentation {
   pub prefix: &'static str,
 }
 
-impl Drop for TestHistory {
+impl Drop for TestHistoryInner {
   fn drop(&mut self) {
     NUM_TEST_FUNCTIONS.fetch_sub(1, Ordering::Relaxed);
   }
@@ -312,14 +318,22 @@ impl Drop for TestHistory {
 
 impl TestHistory {
   pub fn new() -> TestHistory {
-    NUM_TEST_FUNCTIONS.fetch_add(1, Ordering::Relaxed);
     TestHistory {
+      cell: RefCell::new(TestHistoryInner::new()),
+    }
+  }
+}
+
+impl TestHistoryInner {
+  pub fn new() -> TestHistoryInner {
+    NUM_TEST_FUNCTIONS.fetch_add(1, Ordering::Relaxed);
+    TestHistoryInner {
       earliest_remembered_chunk_index: 0,
       start_time: Instant::now(),
       chunks: VecDeque::with_capacity(MAX_REMEMBERED_CHUNKS),
     }
   }
-  pub fn roll_to_test(&mut self) -> bool {
+  fn roll_to_test(&mut self) -> bool {
     let mut running_total_chunk_time = Duration::from_secs(0);
     let mut running_total_test_time = Duration::from_secs(0);
     let mut running_total_tests_run = 0;
@@ -399,49 +413,5 @@ impl TestHistory {
       });
     }
     assert!(self.chunks.len() <= MAX_REMEMBERED_CHUNKS);
-  }
-
-  pub fn resolve_tests(
-    histories: &mut [&mut TestHistory],
-    function_module_path: &'static str,
-    function_name: &'static str,
-    arguments: &[TestArgumentRepresentation],
-    test_results: &[Option<TestResult>],
-  ) {
-    for (history, test_result) in histories.iter_mut().zip(test_results) {
-      if let Some(test_result) = test_result {
-        history.update_chunks();
-        let chunk = history.chunks.back_mut().unwrap();
-        chunk.total_test_time += test_result.total_time_taken;
-        chunk.total_function_calls += 1;
-        chunk.total_tests_run += 1;
-      }
-    }
-
-    let failure_messages: Vec<_> = test_results
-      .iter()
-      .filter_map(|test_result| {
-        test_result.as_ref().and_then(|test_result| {
-          test_result.result.as_ref().err().map(|message| {
-            detailed_failure_message(
-              function_module_path,
-              function_name,
-              test_result.test_function_path,
-              arguments,
-              &message,
-            )
-          })
-        })
-      })
-      .collect();
-
-    if failure_messages.len() > 0 {
-      let combined_message = failure_messages.join("");
-      if ERRORS_PANIC.load(Ordering::Relaxed) {
-        panic!("{}", combined_message);
-      } else {
-        log::error!("{}", combined_message);
-      }
-    }
   }
 }

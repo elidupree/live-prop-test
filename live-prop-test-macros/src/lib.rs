@@ -5,8 +5,8 @@ use proc_macro2::Span;
 use quote::{quote, quote_spanned};
 use syn::{
   parse::Parser, parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, Expr, FnArg,
-  GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod, Index, ItemImpl, Meta,
-  NestedMeta, Pat, PatIdent, Signature, Token, Type,
+  GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod, ItemImpl, Meta, NestedMeta, Pat,
+  PatIdent, Signature, Token, Type,
 };
 
 /// caveat about Self and generic parameters of the containing impl
@@ -234,20 +234,20 @@ fn live_prop_test_function(
       expression
     })
     .collect();
-  let test_info_types: Vec<Type> = test_function_paths
-    .iter()
-    .map(|_| {
-      let t: Type = parse_quote!(::std::option::Option<(::std::time::Duration, _)>);
-      t
-    })
-    .collect();
+  /*let test_info_types: Vec<Type> = test_function_paths
+  .iter()
+  .map(|_| {
+    let t: Type = parse_quote!(::std::option::Option<(::std::time::Duration, _)>);
+    t
+  })
+  .collect();*/
   let test_function_indices: Vec<_> = (0..num_test_functions).collect();
-  let test_function_tuple_indices: Vec<_> = (0..num_test_functions as u32)
-    .map(|index| Index {
-      index,
-      span: Span::call_site(),
-    })
-    .collect();
+  /*let test_function_tuple_indices: Vec<_> = (0..num_test_functions as u32)
+  .map(|index| Index {
+    index,
+    span: Span::call_site(),
+  })
+  .collect();*/
   let test_function_identifiers: Vec<_> = (0..num_test_functions as u32)
     .map(|index| {
       Ident::new(
@@ -292,6 +292,19 @@ fn live_prop_test_function(
     }
   };
 
+  let make_argument_representations = quote! {
+    // TODO: Refactor this so it can be an array instead of Vec and doesn't need an iterator thingy
+                      let mut iter = argument_representations.iter();
+                      let mut argument_representations = ::std::vec::Vec::new();
+                      #(
+                        argument_representations.push (::live_prop_test::TestArgumentRepresentation {
+                          name: ::std::stringify!(#parameter_values_vec),
+                          value: <::std::string::String as ::std::convert::From::<&str>>::from(::std::iter::Iterator::next(&mut iter).unwrap()),
+                          prefix: #parameter_regression_prefixes,
+                        });
+                      ) *
+  };
+
   let result = vec![
     parse_quote!(
       #[cfg(not(debug_assertions))]
@@ -303,106 +316,73 @@ fn live_prop_test_function(
 
     ),
     parse_quote!(
-          #[cfg(debug_assertions)]
-          #(#attrs) *
-          #vis #defaultness #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
-          #where_clause
-          {
-            #inner_function_definition
+      #[cfg(debug_assertions)]
+      #(#attrs) *
+      #vis #defaultness #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
+      #where_clause
+      {
+        #inner_function_definition
 
-            ::std::thread_local! {
-              static HISTORY: ::std::cell::RefCell<[::live_prop_test::TestHistory; #num_test_functions]> = ::std::cell::RefCell::new([#test_history_initializers]);
+        ::std::thread_local! {
+          static HISTORIES: [::live_prop_test::TestHistory; #num_test_functions] = [#test_history_initializers];
+        }
+
+        HISTORIES.with (| histories | {
+          let mut setup = ::live_prop_test::TestsSetup::new();
+          #(
+            let #test_function_identifiers = setup.setup_test (
+              & histories [#test_function_indices],
+              || #test_function_paths::<#generic_parameter_values>(#parameter_value_references)
+            );
+          ) *
+
+
+          let mut finisher = setup.finish_setup (|| {
+            trait NoDebugFallback {
+              // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
+              fn __live_prop_test_represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
             }
+            impl<T> NoDebugFallback for T {}
+            struct MaybeDebug<T>(T);
+            impl<T: ::std::fmt::Debug> MaybeDebug<T> {
+              fn __live_prop_test_represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
+            }
+            let argument_representations: [::std::string::String; #num_parameters] = [#(
+              #parameter_value_representations
+            ),*];
+            argument_representations
+          });
 
-            HISTORY.with (| history | {
-              // always ignore recursive calls, so nothing weird happens if you call the function from inside the test (e.g. to test that it is commutative)
-              let do_test = if let ::std::result::Result::Ok(mut history) = history.try_borrow_mut() {
-                [#(history[#test_function_indices].roll_to_test()),*]
-              } else {
-                [false; #num_test_functions]
-              };
+          let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
 
-              let test_info: ::std::option::Option<([::std::string::String; #num_parameters], (#(#test_info_types,)*))> = if ::std::iter::Iterator::all (&mut do_test.iter(), |a| !a) {
-                ::std::option::Option::None
-              } else {
-                let start_time = ::std::time::Instant::now();
+          #(
+            finisher.finish_test(
+              & histories [#test_function_indices],
+              #test_function_identifiers,
+              | test_closure, argument_representations | {
+                let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
 
-                trait NoDebugFallback {
-                  // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
-                  fn __live_prop_test_represent(&self)->::std::string::String {<::std::string::String as ::std::convert::From::<&str>>::from("<Debug impl unavailable>")}
-                }
-                impl<T> NoDebugFallback for T {}
-                struct MaybeDebug<T>(T);
-                impl<T: ::std::fmt::Debug> MaybeDebug<T> {
-                  fn __live_prop_test_represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
-                }
-                let argument_representations = [#(
-                  #parameter_value_representations
-                ),*];
+                test_result.map_err (| message | {
+                  #make_argument_representations
 
-                // note: the argument rendering duration is potentially multi-counted
-                // (one for each test function)
-                // this is intentional, as the simplest way
-                let argument_rendering_duration = start_time.elapsed();
-
-                let test_closures_etc = (
-                  #(
-                    if !do_test [#test_function_indices] {
-                      ::std::option::Option::None
-                    } else {
-                      let start_time = ::std::time::Instant::now();
-                      let test_closure = #test_function_paths::<#generic_parameter_values>(#parameter_value_references);
-                      let closure_generating_duration = start_time.elapsed();
-                      ::std::option::Option::Some((argument_rendering_duration + closure_generating_duration, test_closure))
-                    },
-                  )*
-                );
-
-
-                ::std::option::Option::Some ((argument_representations, test_closures_etc))
-              };
-
-              let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
-
-              if let ::std::option::Option::Some ((argument_representations, tests_info)) = test_info {
-                let mut history = history.borrow_mut();
-    //#test_function_indices
-                let test_results = [#(tests_info.#test_function_tuple_indices.map(|(earlier_time_taken, test_closure)| {
-                  let start_time = ::std::time::Instant::now();
-                  let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
-                  let total_time_taken = earlier_time_taken + start_time.elapsed();
-                  ::live_prop_test::TestResult {
-                    test_function_path: ::std::stringify!(#test_function_paths),
-                    total_time_taken,
-                    result: test_result,
-                  }
-                })),*];
-
-                // TODO: Refactor this so it can be an array instead of Vec and doesn't need an iterator thingy
-                let mut iter = ::std::iter::IntoIterator::into_iter (&argument_representations);
-                let mut argument_representations = ::std::vec::Vec::new();
-                  #(
-                    argument_representations.push (::live_prop_test::TestArgumentRepresentation {
-                      name: ::std::stringify!(#parameter_values_vec),
-                      value: <::std::string::String as ::std::convert::From::<&str>>::from(::std::iter::Iterator::next(&mut iter).unwrap()),
-                      prefix: #parameter_regression_prefixes,
-                    });
-                  ) *
-
-                let [#(ref mut #test_function_identifiers,)*] = &mut *history;
-
-                ::live_prop_test::TestHistory::resolve_tests (
-                  &mut [#(#test_function_identifiers,)*],
-                  ::std::module_path!(),
-                  ::std::stringify! (#function_name),
-                  & argument_representations,
-                  & test_results,
-                );
+                  ::live_prop_test::detailed_failure_message (
+                    ::std::module_path!(),
+                    ::std::stringify! (#function_name),
+                    ::std::stringify! (#test_function_paths),
+                    & argument_representations,
+                    & message,
+                  )
+                })
               }
-              result
-            })
-          }
-        ),
+            );
+          ) *
+
+          finisher.finish();
+
+          result
+        })
+      }
+    ),
   ];
   //eprintln!("{}", result);
   Ok(result.into())
