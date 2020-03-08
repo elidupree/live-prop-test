@@ -89,7 +89,7 @@ pub struct TestsSetup {
 }
 
 pub struct TestsFinisher<A> {
-  argument_representations: Option<(A, Duration)>,
+  shared_setup_data: Option<(A, Duration)>,
   failures: Vec<String>,
 }
 
@@ -98,7 +98,7 @@ pub struct TestTemporaries<T> {
 }
 
 pub struct TestTemporariesInner<T> {
-  closure: T,
+  setup_data: T,
   setup_time_taken: Duration,
 }
 
@@ -115,19 +115,19 @@ impl TestsSetup {
   pub fn setup_test<T>(
     &mut self,
     history: &mut TestHistory,
-    setup: impl FnOnce() -> T,
+    test_setup: impl FnOnce() -> T,
   ) -> TestTemporaries<T> {
     let data = if EXECUTION_IS_INSIDE_TEST.with(|in_test| !in_test.get()) && history.roll_to_test()
     {
       self.any_tests_running = true;
       let start_time = Instant::now();
-      let closure = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
+      let setup_data = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
         in_test.set(true);
         defer!(in_test.set(false));
-        (setup)()
+        (test_setup)()
       });
       Some(TestTemporariesInner {
-        closure,
+        setup_data,
         setup_time_taken: start_time.elapsed(),
       })
     } else {
@@ -135,17 +135,17 @@ impl TestsSetup {
     };
     TestTemporaries { data }
   }
-  pub fn finish_setup<A>(self, setup: impl FnOnce() -> A) -> TestsFinisher<A> {
-    let argument_representations = if self.any_tests_running {
+  pub fn finish_setup<A>(self, shared_setup: impl FnOnce() -> A) -> TestsFinisher<A> {
+    let shared_setup_data = if self.any_tests_running {
       let start_time = Instant::now();
-      let representations = (setup)();
-      Some((representations, start_time.elapsed()))
+      let shared_setup_data = (shared_setup)();
+      Some((shared_setup_data, start_time.elapsed()))
     } else {
       None
     };
 
     TestsFinisher {
-      argument_representations,
+      shared_setup_data,
       failures: Vec::new(),
     }
   }
@@ -158,11 +158,9 @@ impl<A> TestsFinisher<A> {
     temporaries: TestTemporaries<T>,
     finish: impl FnOnce(T, &A) -> Result<(), String>,
   ) {
-    if let Some((argument_representations, argument_rendering_time_taken)) =
-      &self.argument_representations
-    {
+    if let Some((shared_setup_data, shared_setup_time_taken)) = &self.shared_setup_data {
       if let Some(TestTemporariesInner {
-        closure,
+        setup_data,
         setup_time_taken,
       }) = temporaries.data
       {
@@ -170,7 +168,7 @@ impl<A> TestsFinisher<A> {
         let test_result = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
           in_test.set(true);
           defer!(in_test.set(false));
-          (finish)(closure, argument_representations)
+          (finish)(setup_data, shared_setup_data)
         });
 
         let finishing_time_taken = start_time.elapsed();
