@@ -35,7 +35,7 @@ struct TestHistorySharedInner {
 }
 
 #[derive(Debug)]
-struct TestHistoryInner {
+pub(crate) struct TestHistoryInner {
   shared: Arc<TestHistoryShared>,
 }
 
@@ -50,8 +50,33 @@ lazy_static! {
   };
 }
 
+impl Drop for TestHistoryInner {
+  fn drop(&mut self) {
+    let mut shared = self.shared.inner.lock();
+    shared.debt = 0.0;
+    shared.adjusted_unpaid_calls = 0.0;
+    shared.exists = false;
+  }
+}
+
 impl TestHistoryInner {
-  fn roll_to_test(&mut self) -> bool {
+  pub fn new() -> TestHistoryInner {
+    let shared = Arc::new(TestHistoryShared {
+      inner: Mutex::new(TestHistorySharedInner {
+        debt: 0.0,
+        adjusted_unpaid_calls: 0.0,
+        exists: true,
+      }),
+    });
+    GLOBAL_DEBT_TRACKER
+      .inner
+      .lock()
+      .histories
+      .push(shared.clone());
+    TestHistoryInner { shared }
+  }
+
+  pub fn roll_to_test(&mut self) -> bool {
     GLOBAL_DEBT_TRACKER.update_if_needed();
 
     let mut shared = self.shared.inner.lock();
@@ -79,7 +104,7 @@ impl TestHistoryInner {
     result
   }
 
-  fn test_completed(&mut self, total_time_taken: Duration) {
+  pub fn test_completed(&mut self, total_time_taken: Duration) {
     let mut shared = self.shared.inner.lock();
     shared.debt += total_time_taken.as_secs_f64();
     shared.adjusted_unpaid_calls += 1.0;
@@ -142,11 +167,15 @@ impl GlobalDebtTracker {
     let mut total_unpaid_calls = 0.0;
     let mut available_time = time_since_last_update.as_secs_f64() * FRACTION_TO_USE_FOR_TESTING;
     let mut unpaid_calls_in_remaining_histories = vec![0.0; histories_snapshot.len()];
+    let mut nonexistent_count = 0;
     for ((_original_index, history), &mut ref mut dst) in histories_snapshot
       .iter()
       .zip(&mut unpaid_calls_in_remaining_histories)
       .rev()
     {
+      if !history.exists {
+        nonexistent_count += 1;
+      }
       total_unpaid_calls += history.adjusted_unpaid_calls;
       *dst = total_unpaid_calls;
     }
@@ -170,6 +199,11 @@ impl GlobalDebtTracker {
       let mut original = inner.histories[*original_index].inner.lock();
       original.debt -= paid_debt;
       original.adjusted_unpaid_calls -= paid_calls;
+    }
+
+    // only bother to do extra Mutex locks when there are a bunch of deleted histories to purge
+    if nonexistent_count * 5 > histories_snapshot.len() {
+      inner.histories.retain(|shared| shared.inner.lock().exists);
     }
   }
 }
@@ -195,7 +229,9 @@ mod tests {
     fn arbitrary_test_history_shared() (debt in 0.0..1.0, log_adjusted_unpaid_calls in -40.0f64..40.0f64, exists in any::<bool>())->TestHistoryShared {
       TestHistoryShared {
         inner: Mutex::new (TestHistorySharedInner {
-          debt: if exists { debt } else {0.0}, adjusted_unpaid_calls: log_adjusted_unpaid_calls.exp2(), exists
+          debt: if exists { debt } else {0.0},
+          adjusted_unpaid_calls: if exists { log_adjusted_unpaid_calls.exp2() } else {0.0},
+          exists
         })
       }
     }
@@ -218,9 +254,11 @@ mod tests {
     #[test]
     fn proptest_global_debt_tracker_update(tracker in arbitrary_global_debt_tracker(), update_duration_secs in (SECONDS_PER_UPDATE*0.1)..(SECONDS_PER_UPDATE*10.0)) {
       let total_debt_before = tracker.total_debt();
-      let histories_snapshot_before: Vec<TestHistorySharedInner> = tracker.inner
-        .lock()
-        .histories
+      let histories_including_removed = tracker.inner
+              .lock()
+              .histories
+              .clone();
+      let histories_snapshot_before: Vec<TestHistorySharedInner> = histories_including_removed
         .iter()
         .map(|shared| shared.inner.lock().clone())
         .collect();
@@ -234,9 +272,7 @@ mod tests {
       let observed_elapsed = (tracker.inner.lock().last_update_time_since_start - start_elapsed).as_secs_f64();
       let available_time = observed_elapsed * FRACTION_TO_USE_FOR_TESTING;
       let total_debt_after = tracker.total_debt();
-      let histories_snapshot_after: Vec<TestHistorySharedInner> = tracker.inner
-        .lock()
-        .histories
+      let histories_snapshot_after: Vec<TestHistorySharedInner> = histories_including_removed
         .iter()
         .map(|shared| shared.inner.lock().clone())
         .collect();
@@ -253,6 +289,7 @@ mod tests {
       let mut unpaid_calls_before_of_non_fully_paid_histories = 0.0;
       let mut debt_removal_of_non_fully_paid_histories = 0.0;
 
+      //dbg!((&histories_snapshot_before, &histories_snapshot_after));
       for (before, after) in histories_snapshot_before.iter().zip (& histories_snapshot_after) {
         prop_assert!(after.debt <= before.debt);
         prop_assert!(after.debt >= 0.0);
