@@ -275,6 +275,8 @@ static THROTTLE_EXPENSIVE_TESTS: AtomicBool = AtomicBool::new(true);
 static ERRORS_PANIC: AtomicBool = AtomicBool::new(true);
 static SUGGEST_REGRESSION_TESTS: AtomicBool = AtomicBool::new(true);
 
+mod throttling_internals;
+
 struct HistoryChunk {
   total_test_time: Duration,
   total_function_calls: u64,

@@ -7,5 +7,10 @@ edition = "2018"
 [dependencies]
 live-prop-test-macros = { path = "../live-prop-test-macros", version = "0.1" }
 rand = "0.7.3"
-log = "0.4"
+log = "0.4.8"
 scopeguard = "1.1"
+parking_lot = "0.10.0"
+ordered-float = "1.0"
+
+[dev-dependencies]
+proptest = "0.9.5"
