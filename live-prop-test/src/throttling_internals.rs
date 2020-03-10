@@ -1,10 +1,14 @@
+use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
 use parking_lot::Mutex;
+use rand::random;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const SECONDS_PER_UPDATE: f64 = 0.0001;
+const FRACTION_TO_USE_FOR_TESTING: f64 = 0.1;
+
 #[derive(Debug)]
 struct GlobalDebtTracker {
   start_time: Instant,
@@ -30,7 +34,78 @@ struct TestHistorySharedInner {
   exists: bool,
 }
 
+#[derive(Debug)]
+struct TestHistoryInner {
+  shared: Arc<TestHistoryShared>,
+}
+
+lazy_static! {
+  static ref GLOBAL_DEBT_TRACKER: GlobalDebtTracker = GlobalDebtTracker {
+    start_time: Instant::now(),
+    last_update_index: AtomicU64::new(0),
+    inner: Mutex::new(GlobalDebtTrackerInner {
+      last_update_time_since_start: Duration::from_secs(0),
+      histories: Vec::new(),
+    })
+  };
+}
+
+impl TestHistoryInner {
+  fn roll_to_test(&mut self) -> bool {
+    GLOBAL_DEBT_TRACKER.update_if_needed();
+
+    let mut shared = self.shared.inner.lock();
+
+    // drop off with 1/x^2, leading to a finite expected value of total tests
+    // even if the debt is never paid, while simultaneously meaning that every
+    // call has SOME chance to be tested
+    let x = shared.adjusted_unpaid_calls + 3.0;
+    let probability = 9.0 / (x * x);
+
+    // Since we can legitimately accumulate up to SECONDS_PER_UPDATE * FRACTION_TO_USE_FOR_TESTING
+    // seconds of debt before an update has a chance of reducing it,
+    // auto-pass if we have less than that much debt. Also allow slightly more
+    // than that much debt as a leeway for timing issues.
+    let result = shared.debt < SECONDS_PER_UPDATE * FRACTION_TO_USE_FOR_TESTING * 2.0
+      || random::<f64>() < probability
+      || !super::THROTTLE_EXPENSIVE_TESTS.load(Ordering::Relaxed);
+
+    if !result {
+      // if result is true, this update will be done when the test finishes,
+      // to make sure it applies at the same time as the debt.
+      shared.adjusted_unpaid_calls += 1.0;
+    }
+
+    result
+  }
+
+  fn test_completed(&mut self, total_time_taken: Duration) {
+    let mut shared = self.shared.inner.lock();
+    shared.debt += total_time_taken.as_secs_f64();
+    shared.adjusted_unpaid_calls += 1.0;
+  }
+}
+
 impl GlobalDebtTracker {
+  fn update_if_needed(&self) {
+    let time_since_start = self.start_time.elapsed();
+    let target_update_index = (time_since_start.as_secs_f64() / SECONDS_PER_UPDATE) as u64;
+    let last_update_index = self.last_update_index.load(Ordering::Relaxed);
+    if target_update_index > last_update_index {
+      let result = self.last_update_index.compare_exchange(
+        last_update_index,
+        target_update_index,
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+      );
+
+      // If result is Err, another thread got there first and is handling it
+      if result.is_ok() {
+        self.update();
+      }
+    }
+  }
+
   fn update(&self) {
     let time_since_start = self.start_time.elapsed();
 
@@ -65,7 +140,7 @@ impl GlobalDebtTracker {
       .sort_by_key(|(_index, history)| OrderedFloat(history.debt / history.adjusted_unpaid_calls));
 
     let mut total_unpaid_calls = 0.0;
-    let mut available_time = time_since_last_update.as_secs_f64();
+    let mut available_time = time_since_last_update.as_secs_f64() * FRACTION_TO_USE_FOR_TESTING;
     let mut unpaid_calls_in_remaining_histories = vec![0.0; histories_snapshot.len()];
     for ((_original_index, history), &mut ref mut dst) in histories_snapshot
       .iter()
@@ -157,6 +232,7 @@ mod tests {
       tracker.update();
 
       let observed_elapsed = (tracker.inner.lock().last_update_time_since_start - start_elapsed).as_secs_f64();
+      let available_time = observed_elapsed * FRACTION_TO_USE_FOR_TESTING;
       let total_debt_after = tracker.total_debt();
       let histories_snapshot_after: Vec<TestHistorySharedInner> = tracker.inner
         .lock()
@@ -168,11 +244,11 @@ mod tests {
       let debt_removed = total_debt_before - total_debt_after;
       // Note that `std::thread::sleep()` doesn't guarantee the amount of time it sleeps for,
       // so the formulas have to use the observed amount of time
-      let expected_debt_removal = if total_debt_before > observed_elapsed {
-        observed_elapsed
+      let expected_debt_removal = if total_debt_before > available_time {
+        available_time
       } else {total_debt_before };
 
-      prop_assert!((debt_removed - expected_debt_removal).abs() < observed_elapsed*0.01, "Expected {} seconds of debt to be removed, but observed {} seconds being removed (time updated for: target {}, observed {})", expected_debt_removal, debt_removed, observed_elapsed, observed_elapsed);
+      prop_assert!((debt_removed - expected_debt_removal).abs() < available_time*0.01, "Expected {} seconds of debt to be removed, but observed {} seconds being removed (time updated for: target {}, observed {})", expected_debt_removal, debt_removed, update_duration_secs, observed_elapsed);
 
       let mut unpaid_calls_before_of_non_fully_paid_histories = 0.0;
       let mut debt_removal_of_non_fully_paid_histories = 0.0;
