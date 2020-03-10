@@ -186,6 +186,10 @@ mod tests {
         if after.debt > 0.0 {
           unpaid_calls_before_of_non_fully_paid_histories += before.adjusted_unpaid_calls;
           debt_removal_of_non_fully_paid_histories += before.debt - after.debt;
+
+          let debt_per_call_before = before.debt/before.adjusted_unpaid_calls;
+          let debt_per_call_after = after.debt/after.adjusted_unpaid_calls;
+          prop_assert!((debt_per_call_before - debt_per_call_after).abs() <= debt_per_call_before * 0.01, "A history ended up with a significantly different debt-per-unpaid-call ({} before, {} after)", debt_per_call_before, debt_per_call_after);
         }
       }
 
