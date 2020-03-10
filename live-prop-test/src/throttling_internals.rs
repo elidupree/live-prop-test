@@ -114,16 +114,6 @@ mod tests {
         .map(|shared| shared.inner.lock().debt)
         .sum::<f64>()
     }
-
-    fn total_unpaid_calls(&self) -> f64 {
-      self
-        .inner
-        .lock()
-        .histories
-        .iter()
-        .map(|shared| shared.inner.lock().adjusted_unpaid_calls)
-        .sum::<f64>()
-    }
   }
 
   prop_compose! {
@@ -184,11 +174,29 @@ mod tests {
 
       prop_assert!((debt_removed - expected_debt_removal).abs() < observed_elapsed*0.01, "Expected {} seconds of debt to be removed, but observed {} seconds being removed (time updated for: target {}, observed {})", expected_debt_removal, debt_removed, observed_elapsed, observed_elapsed);
 
+      let mut unpaid_calls_before_of_non_fully_paid_histories = 0.0;
+      let mut debt_removal_of_non_fully_paid_histories = 0.0;
+
       for (before, after) in histories_snapshot_before.iter().zip (& histories_snapshot_after) {
         prop_assert!(after.debt <= before.debt);
         prop_assert!(after.debt >= 0.0);
         prop_assert!(after.adjusted_unpaid_calls <= before.adjusted_unpaid_calls);
         prop_assert!(after.adjusted_unpaid_calls >= 0.0);
+
+        if after.debt > 0.0 {
+          unpaid_calls_before_of_non_fully_paid_histories += before.adjusted_unpaid_calls;
+          debt_removal_of_non_fully_paid_histories += before.debt - after.debt;
+        }
+      }
+
+      let expected_debt_removal_per_unpaid_call = debt_removal_of_non_fully_paid_histories / unpaid_calls_before_of_non_fully_paid_histories;
+
+      for (before, after) in histories_snapshot_before.iter().zip (& histories_snapshot_after) {
+        if after.debt > 0.0 {
+          let history_observed_debt_removal = before.debt - after.debt;
+          let history_expected_debt_removal = before.adjusted_unpaid_calls * expected_debt_removal_per_unpaid_call;
+          prop_assert!((history_observed_debt_removal - history_expected_debt_removal).abs() <= expected_debt_removal*0.0001, "One history lost {} debt ({} debt per unpaid call), when it should have lost {} ({} per unpaid call), a significantly different amount", history_observed_debt_removal, history_observed_debt_removal / before.adjusted_unpaid_calls, history_expected_debt_removal, expected_debt_removal_per_unpaid_call);
+        }
       }
     }
   }
