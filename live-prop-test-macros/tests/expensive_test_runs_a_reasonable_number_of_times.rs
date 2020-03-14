@@ -1,5 +1,3 @@
-use live_prop_test::live_prop_test;
-
 use std::cell::RefCell;
 use std::time::{Duration, Instant};
 

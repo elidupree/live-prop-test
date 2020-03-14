@@ -12,6 +12,7 @@ scopeguard = "1.1"
 parking_lot = "0.10.0"
 ordered-float = "1.0"
 lazy_static = "1.4.0"
+cpu-time = "1.0"
 
 [dev-dependencies]
 proptest = "0.9.5"

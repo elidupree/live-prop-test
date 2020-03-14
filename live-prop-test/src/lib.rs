@@ -2,7 +2,7 @@ use scopeguard::defer;
 use std::cell::{Cell, RefCell};
 use std::fmt::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[doc(inline)]
 pub use live_prop_test_macros::live_prop_test;
@@ -106,6 +106,7 @@ thread_local! {
 
 impl TestsSetup {
   pub fn new() -> TestsSetup {
+    throttling_internals::GLOBAL_DEBT_TRACKER.update_if_needed();
     TestsSetup {
       any_tests_running: false,
     }
@@ -119,7 +120,7 @@ impl TestsSetup {
       && history.cell.borrow_mut().roll_to_test()
     {
       self.any_tests_running = true;
-      let start_time = Instant::now();
+      let start_time = throttling_internals::thread_time();
       let setup_data = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
         in_test.set(true);
         defer!(in_test.set(false));
@@ -127,7 +128,7 @@ impl TestsSetup {
       });
       Some(TestTemporariesInner {
         setup_data,
-        setup_time_taken: start_time.elapsed(),
+        setup_time_taken: throttling_internals::thread_time() - start_time,
       })
     } else {
       None
@@ -136,9 +137,12 @@ impl TestsSetup {
   }
   pub fn finish_setup<A>(self, shared_setup: impl FnOnce() -> A) -> TestsFinisher<A> {
     let shared_setup_data = if self.any_tests_running {
-      let start_time = Instant::now();
+      let start_time = throttling_internals::thread_time();
       let shared_setup_data = (shared_setup)();
-      Some((shared_setup_data, start_time.elapsed()))
+      Some((
+        shared_setup_data,
+        throttling_internals::thread_time() - start_time,
+      ))
     } else {
       None
     };
@@ -163,16 +167,20 @@ impl<A> TestsFinisher<A> {
         setup_time_taken,
       }) = temporaries.data
       {
-        let start_time = Instant::now();
+        let start_time = throttling_internals::thread_time();
         let test_result = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
           in_test.set(true);
           defer!(in_test.set(false));
           (finish)(setup_data, shared_setup_data)
         });
 
-        let finishing_time_taken = start_time.elapsed();
+        let finishing_time_taken = throttling_internals::thread_time() - start_time;
         let total_time_taken = setup_time_taken + *shared_setup_time_taken + finishing_time_taken;
 
+        println!(
+          "Time taken {:?} {:?} {:?} {:?}",
+          setup_time_taken, *shared_setup_time_taken, finishing_time_taken, total_time_taken
+        );
         history.cell.borrow_mut().test_completed(total_time_taken);
 
         if let Err(message) = test_result {
@@ -269,6 +277,7 @@ static ERRORS_PANIC: AtomicBool = AtomicBool::new(true);
 static SUGGEST_REGRESSION_TESTS: AtomicBool = AtomicBool::new(true);
 
 mod throttling_internals;
+pub use throttling_internals::override_time_sources;
 use throttling_internals::TestHistoryInner;
 
 pub struct TestHistory {

@@ -1,19 +1,24 @@
+use cpu_time::{ProcessTime, ThreadTime};
 use lazy_static::lazy_static;
 use ordered_float::OrderedFloat;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rand::random;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-const SECONDS_PER_UPDATE: f64 = 0.0001;
+const SECONDS_PER_UPDATE: f64 = 0.002;
 const FRACTION_TO_USE_FOR_TESTING: f64 = 0.1;
 
 #[derive(Debug)]
-struct GlobalDebtTracker {
-  start_time: Instant,
+pub(crate) struct GlobalDebtTracker {
   last_update_index: AtomicU64,
   inner: Mutex<GlobalDebtTrackerInner>,
+}
+
+struct TimeSourceOverrides {
+  process: Box<dyn Fn() -> Duration + Send + Sync>,
+  thread: Box<dyn Fn() -> Duration + Send + Sync>,
 }
 
 #[derive(Debug)]
@@ -40,8 +45,7 @@ pub(crate) struct TestHistoryInner {
 }
 
 lazy_static! {
-  static ref GLOBAL_DEBT_TRACKER: GlobalDebtTracker = GlobalDebtTracker {
-    start_time: Instant::now(),
+  pub(crate) static ref GLOBAL_DEBT_TRACKER: GlobalDebtTracker = GlobalDebtTracker {
     last_update_index: AtomicU64::new(0),
     inner: Mutex::new(GlobalDebtTrackerInner {
       last_update_time_since_start: Duration::from_secs(0),
@@ -60,7 +64,7 @@ impl Drop for TestHistoryInner {
 }
 
 impl TestHistoryInner {
-  pub fn new() -> TestHistoryInner {
+  pub(crate) fn new() -> TestHistoryInner {
     let shared = Arc::new(TestHistoryShared {
       inner: Mutex::new(TestHistorySharedInner {
         debt: 0.0,
@@ -76,9 +80,7 @@ impl TestHistoryInner {
     TestHistoryInner { shared }
   }
 
-  pub fn roll_to_test(&mut self) -> bool {
-    GLOBAL_DEBT_TRACKER.update_if_needed();
-
+  pub(crate) fn roll_to_test(&mut self) -> bool {
     let mut shared = self.shared.inner.lock();
 
     // drop off with 1/x^2, leading to a finite expected value of total tests
@@ -111,18 +113,78 @@ impl TestHistoryInner {
   }
 }
 
+#[cfg(any(unix, windows))]
+fn default_process_time() -> Duration {
+  lazy_static! {
+    static ref START_TIME: ProcessTime = ProcessTime::now();
+  }
+
+  START_TIME.elapsed()
+}
+
+#[cfg(any(unix, windows))]
+fn default_thread_time() -> Duration {
+  thread_local! {
+    static START_TIME: ThreadTime = ThreadTime::now();
+  }
+
+  START_TIME.with(ThreadTime::elapsed)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn default_process_time() -> Duration {
+  panic!("live-prop-test uses `cpu-time` as its default source of time, and `cpu-time` isn't available on this platform (only windows and unix-based platforms). Specify an alternate source using `live_prop_test::override_time_sources`")
+}
+
+#[cfg(not(any(unix, windows)))]
+fn default_thread_time() -> Duration {
+  default_process_time()
+}
+
+lazy_static! {
+  static ref TIME_SOURCE_OVERRIDES: RwLock<Option<TimeSourceOverrides>> = RwLock::new(None);
+}
+
+pub fn override_time_sources(
+  process: Box<dyn Fn() -> Duration + Send + Sync>,
+  thread: Box<dyn Fn() -> Duration + Send + Sync>,
+) {
+  (*TIME_SOURCE_OVERRIDES.write()) = Some(TimeSourceOverrides { process, thread });
+}
+pub(crate) fn process_time() -> Duration {
+  match &*TIME_SOURCE_OVERRIDES.read() {
+    Some(overrides) => (overrides.process)(),
+    None => default_process_time(),
+  }
+}
+pub(crate) fn thread_time() -> Duration {
+  match &*TIME_SOURCE_OVERRIDES.read() {
+    Some(overrides) => (overrides.thread)(),
+    None => default_thread_time(),
+  }
+}
+
 impl GlobalDebtTracker {
-  fn update_if_needed(&self) {
-    let time_since_start = self.start_time.elapsed();
+  pub(crate) fn update_if_needed(&self) {
+    let time_since_start = process_time();
     let target_update_index = (time_since_start.as_secs_f64() / SECONDS_PER_UPDATE) as u64;
     let last_update_index = self.last_update_index.load(Ordering::Relaxed);
+    /*println!(
+      "Updating? Indices {}, {}",
+      last_update_index, target_update_index
+    );*/
     if target_update_index > last_update_index {
+      //println!("Doing the CAS to {}...", target_update_index);
       let result = self.last_update_index.compare_exchange(
         last_update_index,
         target_update_index,
         Ordering::Relaxed,
         Ordering::Relaxed,
       );
+      /*println!(
+        "self.last_update_index is now {}...",
+        self.last_update_index.load(Ordering::Relaxed)
+      );*/
 
       // If result is Err, another thread got there first and is handling it
       if result.is_ok() {
@@ -132,7 +194,8 @@ impl GlobalDebtTracker {
   }
 
   fn update(&self) {
-    let time_since_start = self.start_time.elapsed();
+    let time_since_start = process_time();
+    //println!("Updating.");
 
     let mut inner = self.inner.lock();
     let time_since_last_update = match time_since_start
@@ -144,6 +207,10 @@ impl GlobalDebtTracker {
         return;
       }
     };
+    println!(
+      "Updating with {:?} time_since_last_update",
+      time_since_last_update
+    );
 
     inner.last_update_time_since_start = time_since_start;
 
@@ -166,6 +233,10 @@ impl GlobalDebtTracker {
 
     let mut total_unpaid_calls = 0.0;
     let mut available_time = time_since_last_update.as_secs_f64() * FRACTION_TO_USE_FOR_TESTING;
+    /*println!(
+      "Updating with {} us debt removal",
+      available_time * 1_000_000.0
+    );*/
     let mut unpaid_calls_in_remaining_histories = vec![0.0; histories_snapshot.len()];
     let mut nonexistent_count = 0;
     for ((_original_index, history), &mut ref mut dst) in histories_snapshot
@@ -240,7 +311,6 @@ mod tests {
   prop_compose! {
     fn arbitrary_global_debt_tracker()(vec in prop::collection::vec(arbitrary_test_history_shared(), 0..100)) -> GlobalDebtTracker {
       GlobalDebtTracker {
-        start_time: Instant::now(),
         last_update_index: AtomicU64::new (0),
         inner: Mutex::new (GlobalDebtTrackerInner{
           last_update_time_since_start: Duration::from_secs (0),
@@ -264,7 +334,7 @@ mod tests {
         .collect();
 
       // reset the update start time to right now, just in case some of the setup took time
-      let start_elapsed = tracker.start_time.elapsed();
+      let start_elapsed = process_time();
       tracker.inner.lock().last_update_time_since_start = start_elapsed;
       std::thread::sleep (Duration::from_secs_f64(update_duration_secs));
       tracker.update();
