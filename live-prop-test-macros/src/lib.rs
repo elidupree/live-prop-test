@@ -12,6 +12,7 @@ use syn::{
 /// caveat about Self and generic parameters of the containing impl
 #[proc_macro_attribute]
 pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream {
+  #[allow(clippy::let_and_return)]
   let result = match live_prop_test_impl(arguments, input) {
     Ok(tokens) => tokens,
     Err(err) => err,
@@ -385,7 +386,7 @@ fn live_prop_test_function(
     ),
   ];
   //eprintln!("{}", result);
-  Ok(result.into())
+  Ok(result)
 }
 
 struct ArgumentConfig {

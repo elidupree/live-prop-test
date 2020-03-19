@@ -105,6 +105,7 @@ thread_local! {
 }
 
 impl TestsSetup {
+  #[allow(clippy::new_without_default)]
   pub fn new() -> TestsSetup {
     throttling_internals::GLOBAL_DEBT_TRACKER.update_if_needed();
     TestsSetup {
@@ -191,7 +192,7 @@ impl<A> TestsFinisher<A> {
   }
 
   pub fn finish(self) {
-    if self.failures.len() > 0 {
+    if !self.failures.is_empty() {
       let combined_message = self.failures.join("");
       if ERRORS_PANIC.load(Ordering::Relaxed) {
         panic!("{}", combined_message);
@@ -214,16 +215,12 @@ pub fn detailed_failure_message(
     function_module_path, function_name, test_function_path
   );
   for argument in arguments {
-    write!(
-      &mut assembled,
-      "    {}: {}\n",
-      argument.name, argument.value
-    )
-    .unwrap();
+    writeln!(&mut assembled, "    {}: {}", argument.name, argument.value).unwrap();
   }
   write!(&mut assembled, "  Failure message: {}\n\n", failure_message).unwrap();
 
   if SUGGEST_REGRESSION_TESTS.load(Ordering::Relaxed) {
+    #[allow(clippy::write_with_newline)]
     write!(
       &mut assembled,
       "  Suggested regression test:\n
@@ -245,7 +242,7 @@ fn {}_regression() {{
     const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
     for argument in arguments {
       if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-        write!(
+        writeln!(
           &mut assembled,
           "  let {} = {};\n",
           argument.name, argument.value
@@ -299,6 +296,7 @@ pub struct TestArgumentRepresentation {
 }
 
 impl TestHistory {
+  #[allow(clippy::new_without_default)]
   pub fn new() -> TestHistory {
     TestHistory {
       cell: RefCell::new(TestHistoryInner::new()),
