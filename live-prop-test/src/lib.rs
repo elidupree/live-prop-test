@@ -1,3 +1,5 @@
+#![deny(missing_debug_implementations)]
+
 use scopeguard::defer;
 use std::cell::{Cell, RefCell};
 use std::fmt::Write;
@@ -82,19 +84,23 @@ macro_rules! lpt_assert_ne {
     }};
 }
 
+#[derive(Debug)]
 pub struct TestsSetup {
   any_tests_running: bool,
 }
 
+#[derive(Debug)]
 pub struct TestsFinisher<A> {
   shared_setup_data: Option<(A, Duration)>,
   failures: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct TestTemporaries<T> {
   data: Option<TestTemporariesInner<T>>,
 }
 
+#[derive(Debug)]
 pub struct TestTemporariesInner<T> {
   setup_data: T,
   setup_time_taken: Duration,
@@ -277,11 +283,13 @@ mod throttling_internals;
 pub use throttling_internals::override_time_sources;
 use throttling_internals::TestHistoryInner;
 
+#[derive(Debug)]
 pub struct TestHistory {
   cell: RefCell<TestHistoryInner>,
 }
 
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct TestResult {
   pub test_function_path: &'static str,
   pub total_time_taken: Duration,
@@ -289,6 +297,7 @@ pub struct TestResult {
 }
 
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct TestArgumentRepresentation {
   pub name: &'static str,
   pub value: String,
