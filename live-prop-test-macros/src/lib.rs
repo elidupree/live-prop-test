@@ -252,7 +252,18 @@ fn live_prop_test_function(
   let test_temporaries_identifiers: Vec<_> = (0..num_test_functions as u32)
     .map(|index| {
       Ident::new(
-        &format!("test_temporaries_identifier_{}", index),
+        &format!("__live_prop_test_test_temporaries_identifier_{}", index),
+        Span::call_site(),
+      )
+    })
+    .collect();
+  let argument_representation_identifiers: Vec<_> = (0..num_parameters as u32)
+    .map(|index| {
+      Ident::new(
+        &format!(
+          "__live_prop_test_argument_representation_identifier_{}",
+          index
+        ),
         Span::call_site(),
       )
     })
@@ -293,18 +304,16 @@ fn live_prop_test_function(
     }
   };
 
-  let make_argument_representations = quote! {
-    // TODO: Refactor this so it can be an array instead of Vec and doesn't need an iterator thingy
-                      let mut iter = argument_representations.iter();
-                      let mut argument_representations = ::std::vec::Vec::new();
-                      #(
-                        argument_representations.push (::live_prop_test::TestArgumentRepresentation {
+  let augmented_parameter_value_representations = quote! {{
+                      let (#(#argument_representation_identifiers),*) = parameter_value_representations;
+                      [#(
+                        ::live_prop_test::TestArgumentRepresentation {
                           name: ::std::stringify!(#parameter_values_vec),
-                          value: <::std::string::String as ::std::convert::From::<&str>>::from(::std::iter::Iterator::next(&mut iter).unwrap()),
+                          value: #argument_representation_identifiers,
                           prefix: #parameter_regression_prefixes,
-                        });
-                      ) *
-  };
+                        }
+                      ),*]
+  }};
 
   let result = vec![
     parse_quote!(
@@ -348,10 +357,7 @@ fn live_prop_test_function(
             impl<T: ::std::fmt::Debug> MaybeDebug<T> {
               fn __live_prop_test_represent(&self)->::std::string::String {::std::format!("{:?}", &self.0)}
             }
-            let argument_representations: [::std::string::String; #num_parameters] = [#(
-              #parameter_value_representations
-            ),*];
-            argument_representations
+            (#(#parameter_value_representations),*)
           });
 
           let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
@@ -360,17 +366,15 @@ fn live_prop_test_function(
             finisher.finish_test(
               & histories [#test_function_indices],
               #test_temporaries_identifiers,
-              | test_closure, argument_representations | {
+              | test_closure, parameter_value_representations | {
                 let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
 
                 test_result.map_err (| message | {
-                  #make_argument_representations
-
                   ::live_prop_test::detailed_failure_message (
                     ::std::module_path!(),
                     ::std::stringify! (#function_name),
                     ::std::stringify! (#test_function_paths),
-                    & argument_representations,
+                    & #augmented_parameter_value_representations,
                     & message,
                   )
                 })

@@ -423,9 +423,9 @@ pub struct TestResult {
 
 #[doc(hidden)]
 #[derive(Debug)]
-pub struct TestArgumentRepresentation {
+pub struct TestArgumentRepresentation<'a> {
   pub name: &'static str,
-  pub value: String,
+  pub value: &'a str,
   pub prefix: &'static str,
 }
 
