@@ -231,7 +231,7 @@ pub struct TestTemporaries<T> {
 }
 
 #[derive(Debug)]
-pub struct TestTemporariesInner<T> {
+struct TestTemporariesInner<T> {
   setup_data: T,
   setup_time_taken: Duration,
 }
