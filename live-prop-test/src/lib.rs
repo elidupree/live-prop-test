@@ -413,6 +413,33 @@ pub struct TestHistory {
   cell: RefCell<TestHistoryInner>,
 }
 
+impl TestHistory {
+  #[allow(clippy::new_without_default)]
+  pub fn new() -> TestHistory {
+    TestHistory {
+      cell: RefCell::new(TestHistoryInner::new()),
+    }
+  }
+}
+
+#[doc(hidden)]
+pub trait NoDebugFallback {
+  // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
+  fn __live_prop_test_represent(&self) -> ::std::string::String {
+    <::std::string::String as ::std::convert::From<&str>>::from("<Debug impl unavailable>")
+  }
+}
+impl<T> NoDebugFallback for T {}
+
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct MaybeDebug<T>(pub T);
+impl<T: ::std::fmt::Debug> MaybeDebug<T> {
+  pub fn __live_prop_test_represent(&self) -> ::std::string::String {
+    ::std::format!("{:?}", &self.0)
+  }
+}
+
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct TestResult {
@@ -427,13 +454,4 @@ pub struct TestArgumentRepresentation<'a> {
   pub name: &'static str,
   pub value: &'a str,
   pub prefix: &'static str,
-}
-
-impl TestHistory {
-  #[allow(clippy::new_without_default)]
-  pub fn new() -> TestHistory {
-    TestHistory {
-      cell: RefCell::new(TestHistoryInner::new()),
-    }
-  }
 }
