@@ -193,10 +193,10 @@ impl GlobalDebtTracker {
         return;
       }
     };
-    println!(
+    /*println!(
       "Updating with {:?} time_since_last_update",
       time_since_last_update
-    );
+    );*/
 
     inner.last_update_time_since_start = time_since_start;
 

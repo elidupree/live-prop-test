@@ -314,10 +314,10 @@ impl<A> TestsFinisher<A> {
         let finishing_time_taken = throttling_internals::thread_time() - start_time;
         let total_time_taken = setup_time_taken + *shared_setup_time_taken + finishing_time_taken;
 
-        println!(
+        /*println!(
           "Time taken {:?} {:?} {:?} {:?}",
           setup_time_taken, *shared_setup_time_taken, finishing_time_taken, total_time_taken
-        );
+        );*/
         history.cell.borrow_mut().test_completed(total_time_taken);
 
         if let Err(message) = test_result {
