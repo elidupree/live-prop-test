@@ -249,10 +249,10 @@ fn live_prop_test_function(
     span: Span::call_site(),
   })
   .collect();*/
-  let test_function_identifiers: Vec<_> = (0..num_test_functions as u32)
+  let test_temporaries_identifiers: Vec<_> = (0..num_test_functions as u32)
     .map(|index| {
       Ident::new(
-        &format!("test_function_identifier_{}", index),
+        &format!("test_temporaries_identifier_{}", index),
         Span::call_site(),
       )
     })
@@ -331,7 +331,7 @@ fn live_prop_test_function(
         HISTORIES.with (| histories | {
           let mut setup = ::live_prop_test::TestsSetup::new();
           #(
-            let #test_function_identifiers = setup.setup_test (
+            let #test_temporaries_identifiers = setup.setup_test (
               & histories [#test_function_indices],
               || #test_function_paths::<#generic_parameter_values>(#parameter_value_references)
             );
@@ -359,7 +359,7 @@ fn live_prop_test_function(
           #(
             finisher.finish_test(
               & histories [#test_function_indices],
-              #test_function_identifiers,
+              #test_temporaries_identifiers,
               | test_closure, argument_representations | {
                 let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
 
