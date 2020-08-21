@@ -368,7 +368,7 @@ pub fn detailed_failure_message(
 // you'll need to code your own method of recording and replaying that data.
 #[test]
 fn {}_regression() {{
-  live_prop_test::init_for_regression_tests();
+  live_prop_test::initialize_for_unit_tests();
   
 ",
       function_name
