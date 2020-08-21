@@ -236,20 +236,7 @@ fn live_prop_test_function(
       expression
     })
     .collect();
-  /*let test_info_types: Vec<Type> = test_function_paths
-  .iter()
-  .map(|_| {
-    let t: Type = parse_quote!(::std::option::Option<(::std::time::Duration, _)>);
-    t
-  })
-  .collect();*/
   let test_function_indices: Vec<_> = (0..num_test_functions).collect();
-  /*let test_function_tuple_indices: Vec<_> = (0..num_test_functions as u32)
-  .map(|index| Index {
-    index,
-    span: Span::call_site(),
-  })
-  .collect();*/
   let test_temporaries_identifiers: Vec<_> = (0..num_test_functions as u32)
     .map(|index| {
       Ident::new(
@@ -269,7 +256,6 @@ fn live_prop_test_function(
       )
     })
     .collect();
-  //let parameter_indices: Vec<_> = (0..num_parameters).collect();
 
   // note that because the inner function is defined inside the outer function, it doesn't pollute the outer namespace, but we are still obligated to avoid polluting the inner namespace, so we give it a name that won't collide by coincidence
   let name_for_inner_function = Ident::new(
@@ -306,14 +292,14 @@ fn live_prop_test_function(
   };
 
   let augmented_parameter_value_representations = quote! {{
-                      let (#(#argument_representation_identifiers),*) = parameter_value_representations;
-                      [#(
-                        ::live_prop_test::TestArgumentRepresentation {
-                          name: ::std::stringify!(#parameter_values_vec),
-                          value: #argument_representation_identifiers,
-                          prefix: #parameter_regression_prefixes,
-                        }
-                      ),*]
+    let (#(#argument_representation_identifiers),*) = parameter_value_representations;
+    [#(
+      ::live_prop_test::TestArgumentRepresentation {
+        name: ::std::stringify!(#parameter_values_vec),
+        value: #argument_representation_identifiers,
+        prefix: #parameter_regression_prefixes,
+      }
+    ),*]
   }};
 
   let result = vec![

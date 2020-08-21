@@ -422,6 +422,12 @@ impl TestHistory {
   }
 }
 
+// For the arguments to a tested function,
+// we want to represent them using the Debug impl if available, otherwise a placeholder.
+// This would normally require specialization, but there's a trick using name resolution:
+// Inherent methods are preferred over trait methods,
+// so we fabricate a situation where the inherent method only exists if the trait is implemented,
+// but a trait method always exist as a fallback
 #[doc(hidden)]
 pub trait NoDebugFallback {
   // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
