@@ -1,23 +1,12 @@
 use live_prop_test::live_prop_test;
 
 use std::cell::RefCell;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct TestTracker {
   pub calls: u64,
   pub runs: Vec<u64>,
-}
-
-// Don't use std::thread::sleep for testing, because it's imprecise
-pub fn busy_wait(duration: Duration) {
-  let start_time = Instant::now();
-  while start_time.elapsed() < duration {}
-  println!(
-    "Busy-waited {} micros out of expected {}",
-    start_time.elapsed().as_secs_f64() * 1_000_000.0,
-    duration.as_secs_f64() * 1_000_000.0
-  );
 }
 
 #[live_prop_test(expensive_test)]
@@ -33,7 +22,7 @@ pub fn expensive_test<'a>(
   let calls = tracker.calls;
   tracker.runs.push(calls);
   move |_| {
-    busy_wait(Duration::from_micros(*test_micros));
+    live_prop_test::mock_sleep(Duration::from_micros(*test_micros));
     Ok(())
   }
 }

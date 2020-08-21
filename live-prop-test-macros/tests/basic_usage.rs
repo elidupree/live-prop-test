@@ -30,6 +30,7 @@ fn test_exp2<'a>(
 
 #[test]
 fn test_exp2_works() {
+  ::live_prop_test::initialize_for_internal_tests();
   exp2(4);
 }
 
@@ -38,6 +39,7 @@ fn test_exp2_works() {
     exponent: 4
   Failure message: assertion failed: `(left == right)`")]
 fn test_exp2_wrong_fails() {
+  ::live_prop_test::initialize_for_internal_tests();
   exp2_wrong(4);
 }
 
@@ -52,6 +54,7 @@ fn generic_inferred_test<T: ::std::fmt::Debug>(
 
 #[test]
 fn generic_inferred() {
+  ::live_prop_test::initialize_for_internal_tests();
   generic_inferred_function(4);
 }
 
@@ -65,6 +68,7 @@ fn generic_explicit_test<T: ::std::default::Default>(
 
 #[test]
 fn generic_explicit() {
+  ::live_prop_test::initialize_for_internal_tests();
   generic_explicit_function::<i32>();
 }
 
@@ -84,6 +88,7 @@ fn implicit_no_debug_test<T>(
 #[test]
 #[should_panic(expected = "<Debug impl unavailable>")]
 fn implicit_no_debug() {
+  ::live_prop_test::initialize_for_internal_tests();
   implicit_no_debug_function(4);
 }
 
@@ -103,6 +108,7 @@ fn explicit_no_debug_test(
 #[test]
 #[should_panic(expected = "<Debug impl unavailable>")]
 fn explicit_no_debug() {
+  ::live_prop_test::initialize_for_internal_tests();
   explicit_no_debug_function(4);
 }
 
@@ -158,6 +164,7 @@ fn test_exp2_field<'a>(
     object: Fielded { field: 4 }
   Failure message: assertion failed: `(left == right)`")]
 fn test_exp2_field_fails() {
+  ::live_prop_test::initialize_for_internal_tests();
   exp2_field(&mut Fielded { field: 4 });
 }
 
@@ -166,6 +173,7 @@ fn test_exp2_field_fails() {
     self: Fielded { field: 4 }
   Failure message: assertion failed: `(left == right)`")]
 fn test_exp2_field_inherent_method_fails() {
+  ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field();
 }
 
@@ -174,5 +182,6 @@ fn test_exp2_field_inherent_method_fails() {
     self: Fielded { field: 4 }
   Failure message: assertion failed: `(left == right)`")]
 fn test_exp2_field_trait_method_fails() {
+  ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field_trait_method();
 }

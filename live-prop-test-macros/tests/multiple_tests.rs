@@ -52,47 +52,55 @@ fn is_bigger<'a>(input: &'a i32) -> impl FnOnce(&i32) -> Result<(), String> + 'a
 #[test]
 #[should_panic(expected = "is_even")]
 fn test_double_same_attribute_not_even() {
+  ::live_prop_test::initialize_for_internal_tests();
   double_same_attribute(1);
 }
 
 #[test]
 #[should_panic(expected = "is_bigger")]
 fn test_double_same_attribute_not_bigger() {
+  ::live_prop_test::initialize_for_internal_tests();
   double_same_attribute(-4);
 }
 
 #[test]
 #[should_panic(expected = "is_even")]
 fn test_double_separate_attributes_not_even() {
+  ::live_prop_test::initialize_for_internal_tests();
   double_separate_attributes(1);
 }
 
 #[test]
 #[should_panic(expected = "is_bigger")]
 fn test_double_separate_attributes_not_bigger() {
+  ::live_prop_test::initialize_for_internal_tests();
   double_separate_attributes(-4);
 }
 
 #[test]
 #[should_panic(expected = "is_even")]
 fn test_trait_double_same_attribute_not_even() {
+  ::live_prop_test::initialize_for_internal_tests();
   1.double_same_attribute();
 }
 
 #[test]
 #[should_panic(expected = "is_bigger")]
 fn test_trait_double_same_attribute_not_bigger() {
+  ::live_prop_test::initialize_for_internal_tests();
   (-4).double_same_attribute();
 }
 
 #[test]
 #[should_panic(expected = "is_even")]
 fn test_trait_double_separate_attributes_not_even() {
+  ::live_prop_test::initialize_for_internal_tests();
   1.double_separate_attributes();
 }
 
 #[test]
 #[should_panic(expected = "is_bigger")]
 fn test_trait_double_separate_attributes_not_bigger() {
+  ::live_prop_test::initialize_for_internal_tests();
   (-4).double_separate_attributes();
 }

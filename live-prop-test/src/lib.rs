@@ -1,26 +1,156 @@
 #![deny(missing_debug_implementations)]
 
+use once_cell::sync::OnceCell;
 use scopeguard::defer;
 use std::cell::{Cell, RefCell};
+use std::fmt;
 use std::fmt::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 #[doc(inline)]
 pub use live_prop_test_macros::live_prop_test;
 
-pub fn init_for_regression_tests() {
-  set_panic_on_errors(true);
-  set_throttle_expensive_tests(false);
-  SUGGEST_REGRESSION_TESTS.store(false, Ordering::Relaxed);
+static GLOBALS: OnceCell<LivePropTestGlobals> = OnceCell::new();
+#[derive(Debug)]
+struct LivePropTestGlobals {
+  config: LivePropTestConfig,
+  debt_tracker: throttling_internals::GlobalDebtTracker,
 }
 
-pub fn set_panic_on_errors(setting: bool) {
-  ERRORS_PANIC.store(setting, Ordering::Relaxed);
+enum TimeSources {
+  CpuTime,
+  Mock,
+  SinceStartFunction(Box<dyn Fn() -> Duration + Send + Sync>),
 }
 
-pub fn set_throttle_expensive_tests(setting: bool) {
-  THROTTLE_EXPENSIVE_TESTS.store(setting, Ordering::Relaxed);
+impl fmt::Debug for TimeSources {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      TimeSources::CpuTime => f.write_str("CpuTime"),
+      TimeSources::Mock => f.write_str("Mock"),
+      TimeSources::SinceStartFunction(_) => f.write_str("SinceStartFunction(...)"),
+    }
+  }
+}
+
+// Note: mock time is handled entirely within one thread,
+// because we generally don't want tests running in different threads to have any interactions with each other
+thread_local! {
+  static MOCK_TIME: RefCell<Duration> = RefCell::new(Duration::from_secs(0))
+}
+
+#[doc(hidden)]
+pub fn mock_time() -> Duration {
+  MOCK_TIME.with(|a| *a.borrow())
+}
+
+#[doc(hidden)]
+pub fn mock_sleep(duration: Duration) {
+  MOCK_TIME.with(|a| *a.borrow_mut() += duration)
+}
+
+#[derive(Debug)]
+pub struct LivePropTestConfig {
+  initialized_explicitly: bool,
+  for_unit_tests: bool,
+  for_internal_tests: bool,
+  panic_on_errors: bool,
+  throttle_expensive_tests: bool,
+  time_sources: TimeSources,
+}
+
+impl Default for LivePropTestConfig {
+  fn default() -> LivePropTestConfig {
+    LivePropTestConfig {
+      initialized_explicitly: false,
+      for_unit_tests: false,
+      for_internal_tests: false,
+      panic_on_errors: true,
+      throttle_expensive_tests: true,
+      time_sources: TimeSources::CpuTime,
+    }
+  }
+}
+impl LivePropTestConfig {
+  // Private method because it sets the secret flag that allows double-initializing
+  fn for_unit_tests() -> LivePropTestConfig {
+    // unit tests should be consistent, not using any random numbers to decide which things to test.
+    //
+    LivePropTestConfig {
+      initialized_explicitly: false,
+      for_unit_tests: true,
+      for_internal_tests: false,
+      panic_on_errors: true,
+      throttle_expensive_tests: false,
+      time_sources: TimeSources::CpuTime,
+    }
+  }
+  fn for_internal_tests() -> LivePropTestConfig {
+    // unit tests should be consistent, not using any random numbers to decide which things to test.
+    //
+    LivePropTestConfig {
+      initialized_explicitly: false,
+      for_unit_tests: false,
+      for_internal_tests: true,
+      panic_on_errors: true,
+      throttle_expensive_tests: true,
+      time_sources: TimeSources::Mock,
+    }
+  }
+
+  pub fn panic_on_errors(mut self, panic_on_errors: bool) -> Self {
+    self.panic_on_errors = panic_on_errors;
+    self
+  }
+  pub fn throttle_expensive_tests(mut self, throttle_expensive_tests: bool) -> Self {
+    self.throttle_expensive_tests = throttle_expensive_tests;
+    self
+  }
+  pub fn override_time_source(
+    mut self,
+    time_source: Box<dyn Fn() -> Duration + Send + Sync>,
+  ) -> Self {
+    self.time_sources = TimeSources::SinceStartFunction(time_source);
+    self
+  }
+
+  pub fn initialize(mut self) {
+    let for_unit_tests = self.for_unit_tests;
+    let for_internal_tests = self.for_internal_tests;
+    self.initialized_explicitly = true;
+    let mut already_initialized = true;
+    let result = GLOBALS.get_or_init(|| {
+      already_initialized = false;
+      LivePropTestGlobals {
+        config: self,
+        debt_tracker: throttling_internals::GlobalDebtTracker::new(),
+      }
+    });
+
+    if already_initialized
+      && !(for_unit_tests && result.config.for_unit_tests)
+      && !(for_internal_tests && result.config.for_internal_tests)
+    {
+      panic!("Attempted to initalize live-prop-test when it was already initialized. (Note: If this is in a #[test], be aware that multiple tests may run during the same program execution. Consider using `live_prop_test::initialize_for_unit_tests()`, which is idempotent.)");
+    }
+  }
+}
+
+// Currently tests all recursive calls, but no API guarantees about recursive calls
+pub fn initialize_for_unit_tests() {
+  LivePropTestConfig::for_unit_tests().initialize()
+}
+
+#[doc(hidden)]
+pub fn initialize_for_internal_tests() {
+  LivePropTestConfig::for_internal_tests().initialize()
+}
+
+fn get_globals() -> &'static LivePropTestGlobals {
+  match GLOBALS.get() {
+    Some(globals) => globals,
+    None => panic!("Attempted to use live-prop-test without initializing it. Consider putting `LivePropTestConfig::default().initialize();` at the top of your main function. (Or `live_prop_test::initialize_for_unit_tests();`, if this is in a unit test.)"),
+  }
 }
 
 #[macro_export]
@@ -113,7 +243,7 @@ thread_local! {
 impl TestsSetup {
   #[allow(clippy::new_without_default)]
   pub fn new() -> TestsSetup {
-    throttling_internals::GLOBAL_DEBT_TRACKER.update_if_needed();
+    get_globals().debt_tracker.update_if_needed();
     TestsSetup {
       any_tests_running: false,
     }
@@ -200,7 +330,7 @@ impl<A> TestsFinisher<A> {
   pub fn finish(self) {
     if !self.failures.is_empty() {
       let combined_message = self.failures.join("");
-      if ERRORS_PANIC.load(Ordering::Relaxed) {
+      if get_globals().config.panic_on_errors {
         panic!("{}", combined_message);
       } else {
         log::error!("{}", combined_message);
@@ -225,7 +355,7 @@ pub fn detailed_failure_message(
   }
   write!(&mut assembled, "  Failure message: {}\n\n", failure_message).unwrap();
 
-  if SUGGEST_REGRESSION_TESTS.load(Ordering::Relaxed) {
+  if !get_globals().config.for_unit_tests {
     #[allow(clippy::write_with_newline)]
     write!(
       &mut assembled,
@@ -275,12 +405,7 @@ fn {}_regression() {{
   assembled
 }
 
-static THROTTLE_EXPENSIVE_TESTS: AtomicBool = AtomicBool::new(true);
-static ERRORS_PANIC: AtomicBool = AtomicBool::new(true);
-static SUGGEST_REGRESSION_TESTS: AtomicBool = AtomicBool::new(true);
-
 mod throttling_internals;
-pub use throttling_internals::override_time_sources;
 use throttling_internals::TestHistoryInner;
 
 #[derive(Debug)]

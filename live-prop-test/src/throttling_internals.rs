@@ -1,7 +1,8 @@
+use crate::TimeSources;
 use cpu_time::{ProcessTime, ThreadTime};
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use rand::random;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -14,11 +15,6 @@ const FRACTION_TO_USE_FOR_TESTING: f64 = 0.1;
 pub(crate) struct GlobalDebtTracker {
   last_update_index: AtomicU64,
   inner: Mutex<GlobalDebtTrackerInner>,
-}
-
-struct TimeSourceOverrides {
-  process: Box<dyn Fn() -> Duration + Send + Sync>,
-  thread: Box<dyn Fn() -> Duration + Send + Sync>,
 }
 
 #[derive(Debug)]
@@ -44,16 +40,6 @@ pub(crate) struct TestHistoryInner {
   shared: Arc<TestHistoryShared>,
 }
 
-lazy_static! {
-  pub(crate) static ref GLOBAL_DEBT_TRACKER: GlobalDebtTracker = GlobalDebtTracker {
-    last_update_index: AtomicU64::new(0),
-    inner: Mutex::new(GlobalDebtTrackerInner {
-      last_update_time_since_start: Duration::from_secs(0),
-      histories: Vec::new(),
-    })
-  };
-}
-
 impl Drop for TestHistoryInner {
   fn drop(&mut self) {
     let mut shared = self.shared.inner.lock();
@@ -72,7 +58,8 @@ impl TestHistoryInner {
         exists: true,
       }),
     });
-    GLOBAL_DEBT_TRACKER
+    crate::get_globals()
+      .debt_tracker
       .inner
       .lock()
       .histories
@@ -95,7 +82,7 @@ impl TestHistoryInner {
     // than that much debt as a leeway for timing issues.
     let result = shared.debt < SECONDS_PER_UPDATE * FRACTION_TO_USE_FOR_TESTING * 2.0
       || random::<f64>() < probability
-      || !super::THROTTLE_EXPENSIVE_TESTS.load(Ordering::Relaxed);
+      || !crate::get_globals().config.throttle_expensive_tests;
 
     if !result {
       // if result is true, this update will be done when the test finishes,
@@ -115,9 +102,7 @@ impl TestHistoryInner {
 
 #[cfg(any(unix, windows))]
 fn default_process_time() -> Duration {
-  lazy_static! {
-    static ref START_TIME: ProcessTime = ProcessTime::now();
-  }
+  static START_TIME: Lazy<ProcessTime> = Lazy::new(|| ProcessTime::now());
 
   START_TIME.elapsed()
 }
@@ -133,7 +118,7 @@ fn default_thread_time() -> Duration {
 
 #[cfg(not(any(unix, windows)))]
 fn default_process_time() -> Duration {
-  panic!("live-prop-test uses `cpu-time` as its default source of time, and `cpu-time` isn't available on this platform (only windows and unix-based platforms). Specify an alternate source using `live_prop_test::override_time_sources`")
+  panic!("live-prop-test uses `cpu-time` as its default source of time, and `cpu-time` isn't available on this platform (only on windows and unix-based platforms). Specify an alternate source using the `LivePropTestConfig` builder.")
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -141,30 +126,31 @@ fn default_thread_time() -> Duration {
   default_process_time()
 }
 
-lazy_static! {
-  static ref TIME_SOURCE_OVERRIDES: RwLock<Option<TimeSourceOverrides>> = RwLock::new(None);
-}
-
-pub fn override_time_sources(
-  process: Box<dyn Fn() -> Duration + Send + Sync>,
-  thread: Box<dyn Fn() -> Duration + Send + Sync>,
-) {
-  (*TIME_SOURCE_OVERRIDES.write()) = Some(TimeSourceOverrides { process, thread });
-}
 pub(crate) fn process_time() -> Duration {
-  match &*TIME_SOURCE_OVERRIDES.read() {
-    Some(overrides) => (overrides.process)(),
-    None => default_process_time(),
+  match &crate::get_globals().config.time_sources {
+    TimeSources::CpuTime => default_process_time(),
+    TimeSources::Mock => crate::mock_time(),
+    TimeSources::SinceStartFunction(function) => (function)(),
   }
 }
 pub(crate) fn thread_time() -> Duration {
-  match &*TIME_SOURCE_OVERRIDES.read() {
-    Some(overrides) => (overrides.thread)(),
-    None => default_thread_time(),
+  match &crate::get_globals().config.time_sources {
+    TimeSources::CpuTime => default_thread_time(),
+    TimeSources::Mock => crate::mock_time(),
+    TimeSources::SinceStartFunction(function) => (function)(),
   }
 }
 
 impl GlobalDebtTracker {
+  pub(crate) fn new() -> GlobalDebtTracker {
+    GlobalDebtTracker {
+      last_update_index: AtomicU64::new(0),
+      inner: Mutex::new(GlobalDebtTrackerInner {
+        last_update_time_since_start: Duration::from_secs(0),
+        histories: Vec::new(),
+      }),
+    }
+  }
   pub(crate) fn update_if_needed(&self) {
     let time_since_start = process_time();
     let target_update_index = (time_since_start.as_secs_f64() / SECONDS_PER_UPDATE) as u64;
@@ -234,7 +220,7 @@ impl GlobalDebtTracker {
     let mut total_unpaid_calls = 0.0;
     let mut available_time = time_since_last_update.as_secs_f64() * FRACTION_TO_USE_FOR_TESTING;
     /*println!(
-      "Updating with {} us debt removal",
+      "Updating with {} microseconds debt removal",
       available_time * 1_000_000.0
     );*/
     let mut unpaid_calls_in_remaining_histories = vec![0.0; histories_snapshot.len()];
@@ -282,6 +268,7 @@ impl GlobalDebtTracker {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use parking_lot::Mutex;
   use proptest::prelude::*;
 
   impl GlobalDebtTracker {
@@ -323,6 +310,8 @@ mod tests {
   proptest! {
     #[test]
     fn proptest_global_debt_tracker_update(tracker in arbitrary_global_debt_tracker(), update_duration_secs in (SECONDS_PER_UPDATE*0.1)..(SECONDS_PER_UPDATE*10.0)) {
+      crate::initialize_for_internal_tests();
+
       let total_debt_before = tracker.total_debt();
       let histories_including_removed = tracker.inner
               .lock()
@@ -333,14 +322,11 @@ mod tests {
         .map(|shared| shared.inner.lock().clone())
         .collect();
 
-      // reset the update start time to right now, just in case some of the setup took time
-      let start_elapsed = process_time();
-      tracker.inner.lock().last_update_time_since_start = start_elapsed;
-      std::thread::sleep (Duration::from_secs_f64(update_duration_secs));
+      tracker.inner.lock().last_update_time_since_start = crate::mock_time();
+      crate::mock_sleep(Duration::from_secs_f64(update_duration_secs));
       tracker.update();
 
-      let observed_elapsed = (tracker.inner.lock().last_update_time_since_start - start_elapsed).as_secs_f64();
-      let available_time = observed_elapsed * FRACTION_TO_USE_FOR_TESTING;
+      let available_time = update_duration_secs * FRACTION_TO_USE_FOR_TESTING;
       let total_debt_after = tracker.total_debt();
       let histories_snapshot_after: Vec<TestHistorySharedInner> = histories_including_removed
         .iter()
@@ -348,13 +334,11 @@ mod tests {
         .collect();
 
       let debt_removed = total_debt_before - total_debt_after;
-      // Note that `std::thread::sleep()` doesn't guarantee the amount of time it sleeps for,
-      // so the formulas have to use the observed amount of time
       let expected_debt_removal = if total_debt_before > available_time {
         available_time
       } else {total_debt_before };
 
-      prop_assert!((debt_removed - expected_debt_removal).abs() < available_time*0.01, "Expected {} seconds of debt to be removed, but observed {} seconds being removed (time updated for: target {}, observed {})", expected_debt_removal, debt_removed, update_duration_secs, observed_elapsed);
+      prop_assert!((debt_removed - expected_debt_removal).abs() < available_time*0.01, "Expected {} seconds of debt to be removed, but observed {} seconds being removed (time updated for: target {}, observed {})", expected_debt_removal, debt_removed, update_duration_secs, update_duration_secs);
 
       let mut unpaid_calls_before_of_non_fully_paid_histories = 0.0;
       let mut debt_removal_of_non_fully_paid_histories = 0.0;

@@ -3,3 +3,5 @@ error: #[live_prop_test] can only be applied to a fn item, an impl item, or an a
   |
 3 | #[live_prop_test]
   | ^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in an attribute macro (in Nightly builds, run with -Z macro-backtrace for more info)
