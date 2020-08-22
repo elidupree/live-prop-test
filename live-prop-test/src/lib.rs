@@ -14,7 +14,6 @@ static GLOBALS: OnceCell<LivePropTestGlobals> = OnceCell::new();
 #[derive(Debug)]
 struct LivePropTestGlobals {
   config: LivePropTestConfig,
-  debt_tracker: throttling_internals::GlobalDebtTracker,
 }
 
 enum TimeSources {
@@ -121,10 +120,7 @@ impl LivePropTestConfig {
     let mut already_initialized = true;
     let result = GLOBALS.get_or_init(|| {
       already_initialized = false;
-      LivePropTestGlobals {
-        config: self,
-        debt_tracker: throttling_internals::GlobalDebtTracker::new(),
-      }
+      LivePropTestGlobals { config: self }
     });
 
     if already_initialized
@@ -151,6 +147,10 @@ fn get_globals() -> &'static LivePropTestGlobals {
     Some(globals) => globals,
     None => panic!("Attempted to use live-prop-test without initializing it. Consider putting `LivePropTestConfig::default().initialize();` at the top of your main function. (Or `live_prop_test::initialize_for_unit_tests();`, if this is in a unit test.)"),
   }
+}
+
+fn global_config() -> &'static LivePropTestConfig {
+  &get_globals().config
 }
 
 #[macro_export]
@@ -243,7 +243,7 @@ thread_local! {
 impl TestsSetup {
   #[allow(clippy::new_without_default)]
   pub fn new() -> TestsSetup {
-    get_globals().debt_tracker.update_if_needed();
+    throttling_internals::global_update_if_needed();
     TestsSetup {
       any_tests_running: false,
     }
@@ -330,7 +330,7 @@ impl<A> TestsFinisher<A> {
   pub fn finish(self) {
     if !self.failures.is_empty() {
       let combined_message = self.failures.join("");
-      if get_globals().config.panic_on_errors {
+      if global_config().panic_on_errors {
         panic!("{}", combined_message);
       } else {
         log::error!("{}", combined_message);
@@ -355,7 +355,7 @@ pub fn detailed_failure_message(
   }
   write!(&mut assembled, "  Failure message: {}\n\n", failure_message).unwrap();
 
-  if !get_globals().config.for_unit_tests {
+  if !global_config().for_unit_tests {
     #[allow(clippy::write_with_newline)]
     write!(
       &mut assembled,

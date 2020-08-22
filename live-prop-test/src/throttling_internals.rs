@@ -1,31 +1,23 @@
 use crate::TimeSources;
-use cpu_time::{ProcessTime, ThreadTime};
-use once_cell::sync::Lazy;
+use cpu_time::ThreadTime;
 use ordered_float::OrderedFloat;
-use parking_lot::Mutex;
 use rand::random;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 const SECONDS_PER_UPDATE: f64 = 0.002;
 const FRACTION_TO_USE_FOR_TESTING: f64 = 0.1;
 
 #[derive(Debug)]
-pub(crate) struct GlobalDebtTracker {
-  last_update_index: AtomicU64,
-  inner: Mutex<GlobalDebtTrackerInner>,
-}
-
-#[derive(Debug)]
-struct GlobalDebtTrackerInner {
+struct TimeBank {
   last_update_time_since_start: Duration,
-  histories: Vec<Arc<TestHistoryShared>>,
+  histories: Vec<Rc<TestHistoryShared>>,
 }
 
 #[derive(Debug)]
 struct TestHistoryShared {
-  inner: Mutex<TestHistorySharedInner>,
+  inner: RefCell<TestHistorySharedInner>,
 }
 
 #[derive(Clone, Debug)]
@@ -37,38 +29,44 @@ struct TestHistorySharedInner {
 
 #[derive(Debug)]
 pub(crate) struct TestHistoryInner {
-  shared: Arc<TestHistoryShared>,
+  shared: Rc<TestHistoryShared>,
 }
 
 impl Drop for TestHistoryInner {
   fn drop(&mut self) {
-    let mut shared = self.shared.inner.lock();
+    let mut shared = self.shared.inner.borrow_mut();
     shared.debt = 0.0;
     shared.adjusted_unpaid_calls = 0.0;
     shared.exists = false;
   }
 }
 
+thread_local! {
+  static TIME_BANK: RefCell<TimeBank> = RefCell::new(TimeBank {
+    last_update_time_since_start: thread_time(),
+    histories: Vec::new(),
+  });
+}
+
+pub(crate) fn global_update_if_needed() {
+  TIME_BANK.with(|bank| bank.borrow_mut().update_if_needed());
+}
+
 impl TestHistoryInner {
   pub(crate) fn new() -> TestHistoryInner {
-    let shared = Arc::new(TestHistoryShared {
-      inner: Mutex::new(TestHistorySharedInner {
+    let shared = Rc::new(TestHistoryShared {
+      inner: RefCell::new(TestHistorySharedInner {
         debt: 0.0,
         adjusted_unpaid_calls: 0.0,
         exists: true,
       }),
     });
-    crate::get_globals()
-      .debt_tracker
-      .inner
-      .lock()
-      .histories
-      .push(shared.clone());
+    TIME_BANK.with(|bank| bank.borrow_mut().histories.push(shared.clone()));
     TestHistoryInner { shared }
   }
 
   pub(crate) fn roll_to_test(&mut self) -> bool {
-    let mut shared = self.shared.inner.lock();
+    let mut shared = self.shared.inner.borrow_mut();
 
     // drop off with 1/x^2, leading to a finite expected value of total tests
     // even if the debt is never paid, while simultaneously meaning that every
@@ -82,7 +80,7 @@ impl TestHistoryInner {
     // than that much debt as a leeway for timing issues.
     let result = shared.debt < SECONDS_PER_UPDATE * FRACTION_TO_USE_FOR_TESTING * 2.0
       || random::<f64>() < probability
-      || !crate::get_globals().config.throttle_expensive_tests;
+      || !crate::global_config().throttle_expensive_tests;
 
     if !result {
       // if result is true, this update will be done when the test finishes,
@@ -94,17 +92,10 @@ impl TestHistoryInner {
   }
 
   pub fn test_completed(&mut self, total_time_taken: Duration) {
-    let mut shared = self.shared.inner.lock();
+    let mut shared = self.shared.inner.borrow_mut();
     shared.debt += total_time_taken.as_secs_f64();
     shared.adjusted_unpaid_calls += 1.0;
   }
-}
-
-#[cfg(any(unix, windows))]
-fn default_process_time() -> Duration {
-  static START_TIME: Lazy<ProcessTime> = Lazy::new(ProcessTime::now);
-
-  START_TIME.elapsed()
 }
 
 #[cfg(any(unix, windows))]
@@ -117,150 +108,88 @@ fn default_thread_time() -> Duration {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn default_process_time() -> Duration {
+fn default_thread_time() -> Duration {
   panic!("live-prop-test uses `cpu-time` as its default source of time, and `cpu-time` isn't available on this platform (only on windows and unix-based platforms). Specify an alternate source using the `LivePropTestConfig` builder.")
 }
 
-#[cfg(not(any(unix, windows)))]
-fn default_thread_time() -> Duration {
-  default_process_time()
-}
-
-pub(crate) fn process_time() -> Duration {
-  match &crate::get_globals().config.time_sources {
-    TimeSources::CpuTime => default_process_time(),
-    TimeSources::Mock => crate::mock_time(),
-    TimeSources::SinceStartFunction(function) => (function)(),
-  }
-}
 pub(crate) fn thread_time() -> Duration {
-  match &crate::get_globals().config.time_sources {
+  match &crate::global_config().time_sources {
     TimeSources::CpuTime => default_thread_time(),
     TimeSources::Mock => crate::mock_time(),
     TimeSources::SinceStartFunction(function) => (function)(),
   }
 }
 
-impl GlobalDebtTracker {
-  pub(crate) fn new() -> GlobalDebtTracker {
-    GlobalDebtTracker {
-      last_update_index: AtomicU64::new(0),
-      inner: Mutex::new(GlobalDebtTrackerInner {
-        last_update_time_since_start: Duration::from_secs(0),
-        histories: Vec::new(),
-      }),
-    }
-  }
-  pub(crate) fn update_if_needed(&self) {
-    let time_since_start = process_time();
-    let target_update_index = (time_since_start.as_secs_f64() / SECONDS_PER_UPDATE) as u64;
-    let last_update_index = self.last_update_index.load(Ordering::Relaxed);
-    /*println!(
-      "Updating? Indices {}, {}",
-      last_update_index, target_update_index
-    );*/
-    if target_update_index > last_update_index {
-      //println!("Doing the CAS to {}...", target_update_index);
-      let result = self.last_update_index.compare_exchange(
-        last_update_index,
-        target_update_index,
-        Ordering::Relaxed,
-        Ordering::Relaxed,
-      );
-      /*println!(
-        "self.last_update_index is now {}...",
-        self.last_update_index.load(Ordering::Relaxed)
-      );*/
-
-      // If result is Err, another thread got there first and is handling it
-      if result.is_ok() {
-        self.update();
-      }
-    }
-  }
-
-  fn update(&self) {
-    let time_since_start = process_time();
-    //println!("Updating.");
-
-    let mut inner = self.inner.lock();
-    let time_since_last_update = match time_since_start
-      .checked_sub(inner.last_update_time_since_start)
+impl TimeBank {
+  pub(crate) fn update_if_needed(&mut self) {
+    let time_since_start = thread_time();
+    if time_since_start.as_secs_f64()
+      >= self.last_update_time_since_start.as_secs_f64() + SECONDS_PER_UPDATE
     {
-      Some(a) => a,
-      None => {
-        log::error!("live-prop-test observed negative time since its last global update; this shouldn't be possible");
-        return;
-      }
-    };
-    /*println!(
-      "Updating with {:?} time_since_last_update",
-      time_since_last_update
-    );*/
-
-    inner.last_update_time_since_start = time_since_start;
-
-    let mut histories_snapshot: Vec<(usize, TestHistorySharedInner)> = inner
-      .histories
-      .iter()
-      .map(|shared| shared.inner.lock().clone())
-      // collect the original indices, so we know which originals to update
-      // after we sort the snapshot later
-      .enumerate()
-      .collect();
-
-    // note: if a single history has very high calls but low debt, then its "fair share"
-    // would hog up all of the available time, but then completely pay off its debt
-    // while hardly using any of the time.
-    // To make sure the spillover gets used, handle histories with the most spillover FIRST.
-    // This could theoretically be only a partial sort, but code simplicity is also important.
-    histories_snapshot
-      .sort_by_key(|(_index, history)| OrderedFloat(history.debt / history.adjusted_unpaid_calls));
-
-    let mut total_unpaid_calls = 0.0;
-    let mut available_time = time_since_last_update.as_secs_f64() * FRACTION_TO_USE_FOR_TESTING;
-    /*println!(
-      "Updating with {} microseconds debt removal",
-      available_time * 1_000_000.0
-    );*/
-    let mut unpaid_calls_in_remaining_histories = vec![0.0; histories_snapshot.len()];
-    let mut nonexistent_count = 0;
-    for ((_original_index, history), &mut ref mut dst) in histories_snapshot
-      .iter()
-      .zip(&mut unpaid_calls_in_remaining_histories)
-      .rev()
-    {
-      if !history.exists {
-        nonexistent_count += 1;
-      }
-      total_unpaid_calls += history.adjusted_unpaid_calls;
-      *dst = total_unpaid_calls;
-    }
-
-    for ((original_index, history), unpaid_calls_in_remaining_histories) in histories_snapshot
-      .iter()
-      .zip(unpaid_calls_in_remaining_histories)
-    {
-      let share =
-        available_time * history.adjusted_unpaid_calls / unpaid_calls_in_remaining_histories;
-      let (paid_debt, paid_calls) = if history.debt > share {
-        (share, share / history.debt * history.adjusted_unpaid_calls)
-      } else {
-        (history.debt, history.adjusted_unpaid_calls)
+      let time_since_last_update = match time_since_start
+        .checked_sub(self.last_update_time_since_start)
+      {
+        Some(a) => a,
+        None => {
+          log::error!("live-prop-test observed negative time since its last global update; this shouldn't be possible");
+          return;
+        }
       };
-      available_time -= paid_debt;
 
-      // the original may have added debt/calls in the meantime;
-      // still just deduct the snapshot-based values.
-      // we'll catch up with the rest in the next update.
-      let mut original = inner.histories[*original_index].inner.lock();
-      original.debt -= paid_debt;
-      original.adjusted_unpaid_calls -= paid_calls;
-    }
+      self.last_update_time_since_start = time_since_start;
 
-    // only bother to do extra Mutex locks when there are a bunch of deleted histories to purge
-    if nonexistent_count * 5 > histories_snapshot.len() {
-      inner.histories.retain(|shared| shared.inner.lock().exists);
+      // note: if a single history has very high calls but low debt, then its "fair share"
+      // would hog up all of the available time, but then completely pay off its debt
+      // while hardly using any of the time.
+      // To make sure the spillover gets used, handle histories with the most spillover FIRST.
+      // This could theoretically be only a partial sort, but code simplicity is also important.
+      self.histories.sort_by_key(|shared| {
+        let history = shared.inner.borrow();
+        OrderedFloat(history.debt / history.adjusted_unpaid_calls)
+      });
+
+      let mut total_unpaid_calls = 0.0;
+      let mut available_time = time_since_last_update.as_secs_f64() * FRACTION_TO_USE_FOR_TESTING;
+
+      let mut unpaid_calls_in_remaining_histories = vec![0.0; self.histories.len()];
+      for (shared, dst) in self
+        .histories
+        .iter()
+        .zip(&mut unpaid_calls_in_remaining_histories)
+        .rev()
+      {
+        let history = shared.inner.borrow();
+        total_unpaid_calls += history.adjusted_unpaid_calls;
+        *dst = total_unpaid_calls;
+      }
+
+      for (shared, unpaid_calls_in_remaining_histories) in self
+        .histories
+        .iter()
+        .zip(unpaid_calls_in_remaining_histories)
+      {
+        let mut history = shared.inner.borrow_mut();
+        if unpaid_calls_in_remaining_histories == 0.0 {
+          break;
+        }
+        // note: without the parentheses, rounding error can make share > available_time
+        let share =
+          available_time * (history.adjusted_unpaid_calls / unpaid_calls_in_remaining_histories);
+        debug_assert!(share <= available_time);
+        if history.debt > share {
+          available_time -= share;
+          let old_debt = history.debt;
+          let new_debt = old_debt - share;
+          history.adjusted_unpaid_calls *= new_debt / old_debt;
+          history.debt = new_debt;
+        } else {
+          available_time -= history.debt;
+          history.debt = 0.0;
+          history.adjusted_unpaid_calls = 0.0;
+        };
+      }
+
+      self.histories.retain(|shared| shared.inner.borrow().exists);
     }
   }
 }
@@ -268,17 +197,14 @@ impl GlobalDebtTracker {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use parking_lot::Mutex;
   use proptest::prelude::*;
 
-  impl GlobalDebtTracker {
+  impl TimeBank {
     fn total_debt(&self) -> f64 {
       self
-        .inner
-        .lock()
         .histories
         .iter()
-        .map(|shared| shared.inner.lock().debt)
+        .map(|shared| shared.inner.borrow().debt)
         .sum::<f64>()
     }
   }
@@ -286,7 +212,7 @@ mod tests {
   prop_compose! {
     fn arbitrary_test_history_shared() (debt in 0.0..1.0, log_adjusted_unpaid_calls in -40.0f64..40.0f64, exists in any::<bool>())->TestHistoryShared {
       TestHistoryShared {
-        inner: Mutex::new (TestHistorySharedInner {
+        inner: RefCell::new (TestHistorySharedInner {
           debt: if exists { debt } else {0.0},
           adjusted_unpaid_calls: if exists { log_adjusted_unpaid_calls.exp2() } else {0.0},
           exists
@@ -296,41 +222,37 @@ mod tests {
   }
 
   prop_compose! {
-    fn arbitrary_global_debt_tracker()(vec in prop::collection::vec(arbitrary_test_history_shared(), 0..100)) -> GlobalDebtTracker {
-      GlobalDebtTracker {
-        last_update_index: AtomicU64::new (0),
-        inner: Mutex::new (GlobalDebtTrackerInner{
-          last_update_time_since_start: Duration::from_secs (0),
-          histories: vec.into_iter().map(|a| Arc::new(a)).collect(),
-        })
+    fn arbitrary_time_bank()(vec in prop::collection::vec(arbitrary_test_history_shared(), 0..100)) -> TimeBank {
+      TimeBank {
+        last_update_time_since_start: Duration::from_secs (0),
+        histories: vec.into_iter().map(|a| Rc::new(a)).collect(),
       }
     }
   }
 
   proptest! {
     #[test]
-    fn proptest_global_debt_tracker_update(tracker in arbitrary_global_debt_tracker(), update_duration_secs in (SECONDS_PER_UPDATE*0.1)..(SECONDS_PER_UPDATE*10.0)) {
+    fn proptest_global_debt_tracker_update(mut bank in arbitrary_time_bank(), update_duration_secs in (SECONDS_PER_UPDATE*1.0)..(SECONDS_PER_UPDATE*10.0)) {
       crate::initialize_for_internal_tests();
 
-      let total_debt_before = tracker.total_debt();
-      let histories_including_removed = tracker.inner
-              .lock()
+      let total_debt_before = bank.total_debt();
+      let histories_including_removed = bank
               .histories
               .clone();
       let histories_snapshot_before: Vec<TestHistorySharedInner> = histories_including_removed
         .iter()
-        .map(|shared| shared.inner.lock().clone())
+        .map(|shared| shared.inner.borrow().clone())
         .collect();
 
-      tracker.inner.lock().last_update_time_since_start = crate::mock_time();
+      bank.last_update_time_since_start = crate::mock_time();
       crate::mock_sleep(Duration::from_secs_f64(update_duration_secs));
-      tracker.update();
+      bank.update_if_needed();
 
       let available_time = update_duration_secs * FRACTION_TO_USE_FOR_TESTING;
-      let total_debt_after = tracker.total_debt();
+      let total_debt_after = bank.total_debt();
       let histories_snapshot_after: Vec<TestHistorySharedInner> = histories_including_removed
         .iter()
-        .map(|shared| shared.inner.lock().clone())
+        .map(|shared| shared.inner.borrow().clone())
         .collect();
 
       let debt_removed = total_debt_before - total_debt_after;
