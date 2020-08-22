@@ -86,7 +86,7 @@ fn implicit_no_debug_test<T>(
 }
 
 #[test]
-#[should_panic(expected = "<Debug impl unavailable>")]
+#[should_panic(expected = "<no Debug impl>")]
 fn implicit_no_debug() {
   ::live_prop_test::initialize_for_internal_tests();
   implicit_no_debug_function(4);
@@ -106,7 +106,7 @@ fn explicit_no_debug_test(
 }
 
 #[test]
-#[should_panic(expected = "<Debug impl unavailable>")]
+#[should_panic(expected = "<Debug impl explicitly disabled>")]
 fn explicit_no_debug() {
   ::live_prop_test::initialize_for_internal_tests();
   explicit_no_debug_function(4);

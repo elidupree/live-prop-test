@@ -191,7 +191,7 @@ fn live_prop_test_function(
 
     if config.no_debug {
       parameter_value_representations.push(
-        parse_quote! { <() as ::live_prop_test::NoDebugFallback>::__live_prop_test_represent(&()) },
+        parse_quote! { <::std::string::String as ::std::convert::From<&str>>::from("<Debug impl explicitly disabled>") },
       )
     } else {
       parameter_value_representations

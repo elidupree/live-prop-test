@@ -429,22 +429,22 @@ impl TestHistory {
 // so we fabricate a situation where the inherent method only exists if the trait is implemented,
 // but a trait method always exist as a fallback
 #[doc(hidden)]
-pub trait NoDebugFallback {
-  // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
-  fn __live_prop_test_represent(&self) -> ::std::string::String {
-    <::std::string::String as ::std::convert::From<&str>>::from("<Debug impl unavailable>")
-  }
-}
-impl<T> NoDebugFallback for T {}
-
-#[doc(hidden)]
 #[derive(Debug)]
 pub struct MaybeDebug<T>(pub T);
 impl<T: ::std::fmt::Debug> MaybeDebug<T> {
+  // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
   pub fn __live_prop_test_represent(&self) -> ::std::string::String {
     ::std::format!("{:?}", &self.0)
   }
 }
+
+#[doc(hidden)]
+pub trait NoDebugFallback {
+  fn __live_prop_test_represent(&self) -> ::std::string::String {
+    <::std::string::String as ::std::convert::From<&str>>::from("<no Debug impl>")
+  }
+}
+impl<T> NoDebugFallback for MaybeDebug<T> {}
 
 #[doc(hidden)]
 #[derive(Debug)]
