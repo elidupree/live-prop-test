@@ -102,7 +102,7 @@ impl TestHistoryInner {
 
 #[cfg(any(unix, windows))]
 fn default_process_time() -> Duration {
-  static START_TIME: Lazy<ProcessTime> = Lazy::new(|| ProcessTime::now());
+  static START_TIME: Lazy<ProcessTime> = Lazy::new(ProcessTime::now);
 
   START_TIME.elapsed()
 }
