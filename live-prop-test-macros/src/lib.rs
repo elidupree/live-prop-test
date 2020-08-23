@@ -324,9 +324,14 @@ fn live_prop_test_function(
             finisher.finish_test(
               & histories [#test_function_indices],
               #test_temporaries_identifiers,
-              ::std::stringify! (#test_function_paths),
-              | test_closure | {
-                (test_closure)(#pass_through_values)
+              | test_closure, failures | {
+                let result = (test_closure)(#pass_through_values);
+                if let ::std::result::Result::Err(failure_message) = ::live_prop_test::LivePropTestResult::canonicalize(result) {
+                  failures.fail_test (::live_prop_test::TestFailure {
+                    test: ::std::stringify! (#test_function_paths),
+                    failure_message,
+                  })
+                }
               }
             );
           ) *

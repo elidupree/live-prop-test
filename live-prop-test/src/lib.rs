@@ -238,15 +238,20 @@ pub struct TestsSetup {
 }
 
 #[derive(Debug)]
-struct PostconditionFailure {
-  postcondition: &'static str,
-  message: Option<String>,
+pub struct TestFailure {
+  pub test: &'static str,
+  pub failure_message: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct TestsFinisher<A> {
   shared_setup_data: Option<(A, Duration)>,
-  failures: Vec<PostconditionFailure>,
+  failures: Vec<TestFailure>,
+}
+
+#[derive(Debug)]
+pub struct TestFailuresCollector<'a> {
+  failures: &'a mut Vec<TestFailure>,
 }
 
 #[derive(Debug)]
@@ -315,16 +320,21 @@ impl TestsSetup {
   }
 }
 
+impl<'a> TestFailuresCollector<'a> {
+  pub fn fail_test(&mut self, failure: TestFailure) {
+    self.failures.push(failure)
+  }
+}
+
 impl<A> TestsFinisher<A>
 where
   for<'a> &'a A: IntoIterator<Item = &'a String>,
 {
-  pub fn finish_test<T, R: LivePropTestResult>(
+  pub fn finish_test<T>(
     &mut self,
     history: &TestHistory,
     temporaries: TestTemporaries<T>,
-    name: &'static str,
-    finish: impl FnOnce(T) -> R,
+    finish: impl FnOnce(T, &mut TestFailuresCollector),
   ) {
     if let Some((_parameter_value_representations, shared_setup_time_taken)) =
       &self.shared_setup_data
@@ -335,10 +345,11 @@ where
       }) = temporaries.data
       {
         let start_time = throttling_internals::thread_time();
-        let test_result = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
+        let failures = &mut self.failures;
+        EXECUTION_IS_INSIDE_TEST.with(|in_test| {
           in_test.set(true);
           defer!(in_test.set(false));
-          (finish)(setup_data)
+          (finish)(setup_data, &mut TestFailuresCollector { failures });
         });
 
         let finishing_time_taken = throttling_internals::thread_time() - start_time;
@@ -349,13 +360,6 @@ where
           setup_time_taken, *shared_setup_time_taken, finishing_time_taken, total_time_taken
         );*/
         history.cell.borrow_mut().test_completed(total_time_taken);
-
-        if let Err(message) = test_result.canonicalize() {
-          self.failures.push(PostconditionFailure {
-            postcondition: name,
-            message,
-          });
-        }
       }
     }
   }
@@ -393,13 +397,8 @@ where
         }
 
         for failure in self.failures {
-          writeln!(
-            &mut assembled,
-            "  Failing postcondition: {}",
-            failure.postcondition
-          )
-          .unwrap();
-          if let Some(message) = failure.message {
+          writeln!(&mut assembled, "  Failing postcondition: {}", failure.test).unwrap();
+          if let Some(message) = failure.failure_message {
             writeln!(&mut assembled, "  Failed with message: {}", message).unwrap();
           }
           writeln!(&mut assembled).unwrap();
