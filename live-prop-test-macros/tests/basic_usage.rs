@@ -3,29 +3,25 @@
 
 use ::live_prop_test::{live_prop_test, lpt_assert_eq};
 
-#[live_prop_test(test_exp2)]
+#[live_prop_test(postcondition = "test_exp2 (exponent, result)")]
 fn exp2(exponent: i32) -> i32 {
   1 << exponent
 }
 
-#[live_prop_test(test_exp2)]
+#[live_prop_test(postcondition = "test_exp2 (exponent, result)")]
 fn exp2_wrong(exponent: i32) -> i32 {
   2 << exponent
 }
 
-fn test_exp2<'a>(
-  exponent: &'a i32,
-) -> impl ::std::ops::FnOnce(&i32) -> ::std::result::Result<(), ::std::string::String> + 'a {
-  move |power| {
-    lpt_assert_eq!(
-      *power,
-      ::std::iter::Iterator::product::<i32>(::std::iter::Iterator::take(
-        ::std::iter::repeat(2),
-        *exponent as usize
-      ))
-    );
-    ::std::result::Result::Ok(())
-  }
+fn test_exp2<'a>(exponent: i32, power: i32) -> ::std::result::Result<(), ::std::string::String> {
+  lpt_assert_eq!(
+    power,
+    ::std::iter::Iterator::product::<i32>(::std::iter::Iterator::take(
+      ::std::iter::repeat(2),
+      exponent as usize
+    ))
+  );
+  ::std::result::Result::Ok(())
 }
 
 #[test]
@@ -41,14 +37,8 @@ fn test_exp2_wrong_fails() {
   exp2_wrong(4);
 }
 
-#[live_prop_test(generic_inferred_test)]
+#[live_prop_test(postcondition = "true")]
 fn generic_inferred_function<T: ::std::fmt::Debug>(_input: T) {}
-
-fn generic_inferred_test<T: ::std::fmt::Debug>(
-  _input: &T,
-) -> impl ::std::ops::FnOnce(&()) -> ::std::result::Result<(), ::std::string::String> {
-  move |_result| ::std::result::Result::Ok(())
-}
 
 #[test]
 fn generic_inferred() {
@@ -56,13 +46,8 @@ fn generic_inferred() {
   generic_inferred_function(4);
 }
 
-#[live_prop_test(generic_explicit_test)]
+#[live_prop_test(postcondition = "true")]
 fn generic_explicit_function<T: ::std::default::Default>() {}
-
-fn generic_explicit_test<T: ::std::default::Default>(
-) -> impl ::std::ops::FnOnce(&()) -> ::std::result::Result<(), ::std::string::String> {
-  move |_result| ::std::result::Result::Ok(())
-}
 
 #[test]
 fn generic_explicit() {
@@ -70,18 +55,8 @@ fn generic_explicit() {
   generic_explicit_function::<i32>();
 }
 
-#[live_prop_test(implicit_no_debug_test)]
+#[live_prop_test(postcondition = "false")]
 fn implicit_no_debug_function<T>(_input: T) {}
-
-fn implicit_no_debug_test<T>(
-  _input: &T,
-) -> impl ::std::ops::FnOnce(&()) -> ::std::result::Result<(), ::std::string::String> {
-  move |_result| {
-    ::std::result::Result::Err(<::std::string::String as ::std::convert::From<&str>>::from(
-      "Fail",
-    ))
-  }
-}
 
 #[test]
 #[should_panic(expected = "<no Debug impl>")]
@@ -90,33 +65,26 @@ fn implicit_no_debug() {
   implicit_no_debug_function(4);
 }
 
-#[live_prop_test(explicit_no_debug_test)]
+/*
+#[live_prop_test(postcondition = "false")]
 fn explicit_no_debug_function(#[live_prop_test(no_debug)] _input: i32) {}
 
-fn explicit_no_debug_test(
-  _input: &i32,
-) -> impl ::std::ops::FnOnce(&()) -> ::std::result::Result<(), ::std::string::String> {
-  move |_result| {
-    ::std::result::Result::Err(<::std::string::String as ::std::convert::From<&str>>::from(
-      "Fail",
-    ))
-  }
-}
 
 #[test]
 #[should_panic(expected = "<Debug impl explicitly disabled>")]
 fn explicit_no_debug() {
   ::live_prop_test::initialize_for_internal_tests();
   explicit_no_debug_function(4);
-}
+}*/
 
 #[derive(Debug)]
 struct Fielded {
   field: i32,
 }
 
+/*
 #[live_prop_test(test_exp2_field)]
-fn exp2_field(#[live_prop_test(pass_through)] object: &mut Fielded) {
+fn exp2_field(object: &mut Fielded) {
   object.field = 2 << object.field
 }
 
@@ -142,7 +110,7 @@ impl Exp2Field for Fielded {
 
 fn test_exp2_field<'a>(
   object: &Fielded,
-) -> impl ::std::ops::FnOnce(&Fielded, &()) -> ::std::result::Result<(), ::std::string::String> + 'a
+) -> ::std::result::Result<(), ::std::string::String> + 'a
 {
   let old_value = object.field;
   move |object, _| {
@@ -177,3 +145,4 @@ fn test_exp2_field_trait_method_fails() {
   ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field_trait_method();
 }
+*/

@@ -1,15 +1,8 @@
-use live_prop_test::{live_prop_test, lpt_assert_eq};
+use live_prop_test::live_prop_test;
 
-#[live_prop_test(test_five)]
+#[live_prop_test(postcondition = "result == 5")]
 const fn five() -> i32 {
   5
-}
-
-fn test_five() -> impl FnOnce(&i32)-> Result<(), String> {
-  move |result| {
-    lpt_assert_eq!(*result, 5);
-    Ok(())
-  }
 }
 
 fn main() {}

@@ -8,18 +8,16 @@ mod utils {
 }
 use utils::expensive_test_tracking::*;
 
-#[live_prop_test(cheap_test)]
+#[live_prop_test(postcondition = "cheap_test(tracker)")]
 pub fn function_with_cheap_test(tracker: &RefCell<TestTracker>) {
   tracker.borrow_mut().calls += 1;
 }
 
-pub fn cheap_test<'a>(
-  tracker: &RefCell<TestTracker>,
-) -> impl FnOnce(&()) -> Result<(), String> + 'a {
+pub fn cheap_test(tracker: &RefCell<TestTracker>) -> bool {
   let mut tracker = tracker.borrow_mut();
   let calls = tracker.calls;
   tracker.runs.push(calls);
-  move |_| Ok(())
+  true
 }
 
 #[test]

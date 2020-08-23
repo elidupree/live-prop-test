@@ -5,13 +5,16 @@ fn double(input: i32) -> i32 {
   input + 4
 }
 
-#[live_prop_test(is_even, is_bigger)]
+#[live_prop_test(
+  postcondition = "is_even(result)",
+  postcondition = "is_bigger(input, result)"
+)]
 fn double_same_attribute(input: i32) -> i32 {
   double(input)
 }
 
-#[live_prop_test(is_even)]
-#[live_prop_test(is_bigger)]
+#[live_prop_test(postcondition = "is_even(result)")]
+#[live_prop_test(postcondition = "is_bigger(input, result)")]
 fn double_separate_attributes(input: i32) -> i32 {
   double(input)
 }
@@ -23,30 +26,29 @@ trait Double {
 
 #[live_prop_test]
 impl Double for i32 {
-  #[live_prop_test(is_even, is_bigger)]
+  #[live_prop_test(
+    postcondition = "is_even(result)",
+    postcondition = "is_bigger(self, result)"
+  )]
   fn double_same_attribute(self) -> i32 {
     double(self)
   }
 
-  #[live_prop_test(is_even)]
-  #[live_prop_test(is_bigger)]
+  #[live_prop_test(postcondition = "is_even(result)")]
+  #[live_prop_test(postcondition = "is_bigger(self, result)")]
   fn double_separate_attributes(self) -> i32 {
     double(self)
   }
 }
 
-fn is_even<'a>(_input: &'a i32) -> impl FnOnce(&i32) -> Result<(), String> + 'a {
-  move |result| {
-    lpt_assert_eq!(result % 2, 0);
-    Ok(())
-  }
+fn is_even(result: i32) -> Result<(), String> {
+  lpt_assert_eq!(result % 2, 0);
+  Ok(())
 }
 
-fn is_bigger<'a>(input: &'a i32) -> impl FnOnce(&i32) -> Result<(), String> + 'a {
-  move |result| {
-    lpt_assert!(result.abs() >= input.abs());
-    Ok(())
-  }
+fn is_bigger(input: i32, result: i32) -> Result<(), String> {
+  lpt_assert!(result.abs() >= input.abs());
+  Ok(())
 }
 
 #[test]

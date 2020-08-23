@@ -5,8 +5,8 @@ use proc_macro2::Span;
 use quote::{quote, quote_spanned};
 use syn::{
   parse::Parser, parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, Expr, FnArg,
-  GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod, ItemImpl, Meta, NestedMeta, Pat,
-  PatIdent, Signature, Token, Type,
+  GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod, ItemImpl, ItemMacro, Lit, Meta,
+  MetaNameValue, NestedMeta, Pat, PatIdent, Signature, Stmt, Token, Type,
 };
 
 /// caveat about Self and generic parameters of the containing impl
@@ -104,20 +104,21 @@ fn live_prop_test_function(
     }
   }
 
-  let mut test_function_paths = Vec::new();
+  let mut test_attributes = Vec::new();
   for (attr_arguments, attr_span) in arguments {
     if attr_arguments.is_empty() {
-      return Err(quote_spanned! {attr_span=> compile_error! ("#[live_prop_test] attribute on fn item expects an argument (name or path of one or more test functions)");}.into());
+      return Err(quote_spanned! {attr_span=> compile_error! ("#[live_prop_test] attribute on fn item expects an argument");}.into());
     }
-    for argument in attr_arguments {
-      match argument {
-      NestedMeta::Meta(Meta::Path(path)) => {
-        test_function_paths.push (path);
-      }
-      _ => return Err(quote_spanned! {argument.span()=> compile_error! ("#[live_prop_test] argument must be name or path of test function");}.into()),
-    }
-    }
+    test_attributes.push(TestAttribute::from_attr_arguments(attr_arguments)?)
   }
+  let test_bundles: Vec<TestBundle> = test_attributes
+    .into_iter()
+    .enumerate()
+    .map(|(index, attribute)| attribute.bundle(index))
+    .collect();
+  let history_declarations = test_bundles.iter().map(|bundle| &bundle.history);
+  let setup_statements = test_bundles.iter().map(|bundle| &bundle.setup);
+  let finish_statements = test_bundles.iter().map(|bundle| &bundle.finish);
 
   let mut attrs = attrs.clone();
   attrs.retain(|attr| !attr.path.is_ident("live_prop_test"));
@@ -228,23 +229,6 @@ fn live_prop_test_function(
 
   let parameter_values_vec: Vec<_> = parameter_values.iter().collect();
   let num_parameters = parameter_values.len();
-  let num_test_functions = test_function_paths.len();
-  let test_history_initializers: Punctuated<Expr, Token![,]> = test_function_paths
-    .iter()
-    .map(|_| {
-      let expression: Expr = parse_quote!(::live_prop_test::TestHistory::new());
-      expression
-    })
-    .collect();
-  let test_function_indices: Vec<_> = (0..num_test_functions).collect();
-  let test_temporaries_identifiers: Vec<_> = (0..num_test_functions as u32)
-    .map(|index| {
-      Ident::new(
-        &format!("__live_prop_test_test_temporaries_identifier_{}", index),
-        Span::call_site(),
-      )
-    })
-    .collect();
 
   // note that because the inner function is defined inside the outer function, it doesn't pollute the outer namespace, but we are still obligated to avoid polluting the inner namespace, so we give it a name that won't collide by coincidence
   let name_for_inner_function = Ident::new(
@@ -298,9 +282,7 @@ fn live_prop_test_function(
       {
         #inner_function_definition
 
-        ::std::thread_local! {
-          static HISTORIES: [::live_prop_test::TestHistory; #num_test_functions] = [#test_history_initializers];
-        }
+        #(#history_declarations) *
 
         const __LIVE_PROP_TEST_DISPLAY_META: ::live_prop_test::TestFunctionDisplayMeta = ::live_prop_test::TestFunctionDisplayMeta {
           module_path: ::std::module_path!(),
@@ -313,47 +295,26 @@ fn live_prop_test_function(
           ),*],
         };
 
-        HISTORIES.with (| histories | {
-          let mut setup = ::live_prop_test::TestsSetup::new();
-          #(
-            let #test_temporaries_identifiers = setup.setup_test (
-              & histories [#test_function_indices],
-              |_| #test_function_paths::<#generic_parameter_values>(#parameter_value_references)
-            );
-          ) *
+        let mut __live_prop_test_setup = ::live_prop_test::TestsSetup::new();
 
+        #(#setup_statements) *
 
-          let mut finisher = setup.finish_setup (
-            __LIVE_PROP_TEST_DISPLAY_META,
-            || {
-              use ::live_prop_test::NoDebugFallback;
-              let parameter_value_representations: [::std::string::String; #num_parameters] = [#(#parameter_value_representations),*];
-              parameter_value_representations
-            }
-          );
+        let mut __live_prop_test_finisher = __live_prop_test_setup.finish_setup (
+          __LIVE_PROP_TEST_DISPLAY_META,
+          || {
+            use ::live_prop_test::NoDebugFallback;
+            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(#parameter_value_representations),*];
+            parameter_value_representations
+          }
+        );
 
-          let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
+        let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
 
-          #(
-            finisher.finish_test(
-              & histories [#test_function_indices],
-              #test_temporaries_identifiers,
-              | test_closure, failures | {
-                let result = (test_closure)(#pass_through_values);
-                if let ::std::result::Result::Err(failure_message) = ::live_prop_test::LivePropTestResult::canonicalize(result) {
-                  failures.fail_test (::live_prop_test::TestFailure {
-                    test: <::std::string::String as ::std::convert::From<&str>>::from(::std::stringify! (#test_function_paths)),
-                    failure_message,
-                  })
-                }
-              }
-            );
-          ) *
+        #(#finish_statements) *
 
-          finisher.finish(__LIVE_PROP_TEST_DISPLAY_META);
+        __live_prop_test_finisher.finish(__LIVE_PROP_TEST_DISPLAY_META);
 
-          result
-        })
+        result
       }
     ),
   ];
@@ -401,4 +362,121 @@ fn gather_argument_config(attrs: &mut Vec<Attribute>) -> Result<ArgumentConfig, 
   attrs.retain(|attr| !attr.path.is_ident("live_prop_test"));
 
   Ok(result)
+}
+
+struct TestAttribute {
+  preconditions: Vec<Expr>,
+  postconditions: Vec<Expr>,
+}
+
+impl TestAttribute {
+  fn from_attr_arguments(
+    arguments: Punctuated<NestedMeta, Token![,]>,
+  ) -> Result<TestAttribute, TokenStream> {
+    let mut result = TestAttribute {
+      preconditions: Vec::new(),
+      postconditions: Vec::new(),
+    };
+
+    for argument in arguments {
+      let mut valid = false;
+      if let NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+        path,
+        lit: Lit::Str(lit_str),
+        ..
+      })) = &argument
+      {
+        if path.is_ident("precondition") {
+          valid = true;
+          result
+            .preconditions
+            .push(lit_str.parse().map_err(|e| e.to_compile_error())?);
+        }
+        if path.is_ident("postcondition") {
+          valid = true;
+          result
+            .postconditions
+            .push(lit_str.parse().map_err(|e| e.to_compile_error())?);
+        }
+      }
+      if !valid {
+        return Err(
+            quote_spanned! {argument.span()=> compile_error!(r#"unrecognized argument to #[live_prop_test(...)]; valid arguments are `precondition="expr"` and `postcondition="expr"`"#);}.into()
+          );
+      }
+    }
+
+    Ok(result)
+  }
+
+  fn bundle(self, unique_id: usize) -> TestBundle {
+    let history_identifier = Ident::new(
+      &format!("__LIVE_PROP_TEST_HISTORY_{}", unique_id),
+      Span::call_site(),
+    );
+    let test_temporaries_identifier = Ident::new(
+      &format!("__LIVE_PROP_TEST_TEMPORARIES_IDENTIFIER_{}", unique_id),
+      Span::call_site(),
+    );
+
+    fn evaluate_and_record_failures(condition: Expr) -> Expr {
+      parse_quote! (
+        if let ::std::result::Result::Err(__live_prop_test_failure_message) = ::live_prop_test::LivePropTestResult::canonicalize(#condition) {
+          __live_prop_test_failures.fail_test (::live_prop_test::TestFailure {
+            test: <::std::string::String as ::std::convert::From<&str>>::from(::std::stringify! (#condition)),
+            failure_message: __live_prop_test_failure_message,
+          });
+        }
+
+      )
+    }
+
+    let preconditions = self
+      .preconditions
+      .into_iter()
+      .map(evaluate_and_record_failures);
+    let postconditions = self
+      .postconditions
+      .into_iter()
+      .map(evaluate_and_record_failures);
+
+    let history = parse_quote!(::std::thread_local! {
+      static #history_identifier: ::live_prop_test::TestHistory = ::live_prop_test::TestHistory::new();
+    });
+
+    let setup = parse_quote! (
+      let #test_temporaries_identifier = #history_identifier.with(|__live_prop_test_history| {
+        __live_prop_test_setup.setup_test(
+          __live_prop_test_history,
+          | __live_prop_test_failures | {
+            #(#preconditions) *
+          }
+        )
+      });
+    );
+
+    let finish = parse_quote! (
+      #history_identifier.with(|__live_prop_test_history| {
+        __live_prop_test_finisher.finish_test(
+          __live_prop_test_history,
+          #test_temporaries_identifier,
+          | __live_prop_test_temporaries, __live_prop_test_failures | {
+            #(#postconditions) *
+          }
+        )
+      });
+    );
+
+    TestBundle {
+      history,
+      setup,
+      finish,
+    }
+  }
+}
+
+struct TestBundle {
+  history: ItemMacro,
+  setup: Stmt,
+  finish: Stmt,
 }
