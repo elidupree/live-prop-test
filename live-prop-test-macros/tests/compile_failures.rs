@@ -8,4 +8,5 @@ fn tests() {
   tester.compile_fail("tests/compile_fail/old_no_arguments.rs");
   tester.compile_fail("tests/compile_fail/old_multiple_arguments.rs");
   tester.compile_fail("tests/compile_fail/old_inside_old.rs");
+  tester.compile_fail("tests/compile_fail/old_mutable_reference.rs");
 }

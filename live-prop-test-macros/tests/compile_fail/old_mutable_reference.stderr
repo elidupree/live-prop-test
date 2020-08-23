@@ -1,0 +1,5 @@
+error: tried to store `old` value of the argument `_input`, which is an &mut reference rather than an owned value. Did you mean `*_input` or `_input.clone()`?
+ --> $DIR/old_mutable_reference.rs:3:34
+  |
+3 | #[live_prop_test(postcondition = "old(_input)")]
+  |                                  ^^^^^^^^^^^^^

@@ -117,14 +117,6 @@ fn live_prop_test_function(
     }
     test_attributes.push(TestAttribute::from_attr_arguments(attr_arguments)?)
   }
-  let test_bundles: Vec<TestBundle> = test_attributes
-    .into_iter()
-    .enumerate()
-    .map(|(index, attribute)| attribute.bundle(index))
-    .collect::<Result<_, _>>()?;
-  let history_declarations = test_bundles.iter().map(|bundle| &bundle.history);
-  let setup_statements = test_bundles.iter().map(|bundle| &bundle.setup);
-  let finish_statements = test_bundles.iter().map(|bundle| &bundle.finish);
 
   let mut attrs = attrs.clone();
   attrs.retain(|attr| !attr.path.is_ident("live_prop_test"));
@@ -163,13 +155,18 @@ fn live_prop_test_function(
 
   let mut parameters = parameters.clone();
   let mut parameter_values: Punctuated<Expr, Token![,]> = Punctuated::new();
-  let mut pass_through_values: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut parameter_value_representations: Vec<Expr> = Vec::new();
   let mut parameter_regression_prefixes: Vec<Expr> = Vec::new();
+  let mut mutable_reference_argument_names: Vec<String> = Vec::new();
 
   for parameter in parameters.iter_mut() {
     let (parameter_value, attrs, prefix): (Expr, _, &str) = match parameter {
-      FnArg::Receiver(receiver) => (parse_quote! {self}, &mut receiver.attrs, ""),
+      FnArg::Receiver(receiver) => {
+        if receiver.mutability.is_some() {
+          mutable_reference_argument_names.push("self".to_string());
+        }
+        (parse_quote! {self}, &mut receiver.attrs, "")
+      }
       FnArg::Typed(pat_type) => {
         let prefix = match &*pat_type.ty {
           Type::Reference(reference) => {
@@ -183,6 +180,9 @@ fn live_prop_test_function(
         };
         match &*pat_type.pat {
           Pat::Ident(PatIdent { ident, .. }) => {
+            if prefix == "&mut " {
+              mutable_reference_argument_names.push(ident.to_string());
+            }
             (parse_quote! {#ident}, &mut pat_type.attrs, prefix)
           }
           pat => {
@@ -203,14 +203,18 @@ fn live_prop_test_function(
       parameter_value_representations
         .push(parse_quote! { ::live_prop_test::MaybeDebug(&#parameter_value).__live_prop_test_represent() })
     }
-    if config.pass_through {
-      pass_through_values.push(parameter_value.clone());
-    }
     parameter_values.push(parameter_value);
     parameter_regression_prefixes.push(parse_quote! {#prefix });
   }
 
-  pass_through_values.push(parse_quote! {&result});
+  let test_bundles: Vec<TestBundle> = test_attributes
+    .into_iter()
+    .enumerate()
+    .map(|(index, attribute)| attribute.bundle(index, &mutable_reference_argument_names))
+    .collect::<Result<_, _>>()?;
+  let history_declarations = test_bundles.iter().map(|bundle| &bundle.history);
+  let setup_statements = test_bundles.iter().map(|bundle| &bundle.setup);
+  let finish_statements = test_bundles.iter().map(|bundle| &bundle.finish);
 
   let mut generic_parameter_values: Punctuated<GenericArgument, Token! [,]> = Punctuated::new();
 
@@ -413,7 +417,11 @@ impl TestAttribute {
     Ok(result)
   }
 
-  fn bundle(self, unique_id: usize) -> Result<TestBundle, TokenStream> {
+  fn bundle(
+    self,
+    unique_id: usize,
+    mutable_reference_argument_names: &[String],
+  ) -> Result<TestBundle, TokenStream> {
     let history_identifier = Ident::new(
       &format!("__LIVE_PROP_TEST_HISTORY_{}", unique_id),
       Span::call_site(),
@@ -440,11 +448,12 @@ impl TestAttribute {
       .into_iter()
       .map(evaluate_and_record_failures);
 
-    struct CollectOldExpressions {
+    struct CollectOldExpressions<'a> {
       old_expressions: Vec<Expr>,
       old_identifiers: Vec<Ident>,
       next_index: usize,
       result: Result<(), TokenStream>,
+      mutable_reference_argument_names: &'a [String],
     }
 
     struct ForbidRecursiveOldExpressions<'a> {
@@ -456,6 +465,7 @@ impl TestAttribute {
       old_identifiers: Vec::new(),
       next_index: 0,
       result: Ok(()),
+      mutable_reference_argument_names,
     };
 
     impl<'a> Visit<'a> for ForbidRecursiveOldExpressions<'a> {
@@ -469,36 +479,46 @@ impl TestAttribute {
       }
     }
 
-    fn expr_call_old_expression(
-      call: &ExprCall,
-      result: &mut Result<(), TokenStream>,
-    ) -> Option<Expr> {
-      if let Expr::Path(path) = &*call.func {
-        if path.path.is_ident("old") {
-          if let Some(first) = call.args.first() {
-            if call.args.len() > 1 {
-              *result = Err (quote_spanned! {call.span()=> compile_error!(r#"`old` can only have one "argument""#);}.into());
+    impl<'a> CollectOldExpressions<'a> {
+      fn expr_call_old_expression(&mut self, call: &ExprCall) -> Option<Expr> {
+        if let Expr::Path(path) = &*call.func {
+          if path.path.is_ident("old") {
+            if let Some(first) = call.args.first() {
+              if call.args.len() > 1 {
+                self.result = Err (quote_spanned! {call.span()=> compile_error!(r#"`old` can only have one "argument""#);}.into());
+              } else {
+                if let Expr::Path(path) = &first {
+                  if let Some(name) = self
+                    .mutable_reference_argument_names
+                    .iter()
+                    .find(|name| path.path.is_ident(name))
+                  {
+                    let error_message = format!("tried to store `old` value of the argument `{name}`, which is an &mut reference rather than an owned value. Did you mean `*{name}` or `{name}.clone()`?", name=name);
+                    self.result =
+                      Err(quote_spanned! {call.span()=> compile_error!(#error_message);}.into());
+                  }
+                }
+                return Some(first.clone());
+              }
             } else {
-              return Some(first.clone());
+              self.result = Err (quote_spanned! {call.span()=> compile_error!(r#"`old` requires an expression as its "argument""#);}.into());
             }
-          } else {
-            *result = Err (quote_spanned! {call.span()=> compile_error!(r#"`old` requires an expression as its "argument""#);}.into());
           }
         }
-      }
-      None
-    }
-    fn expr_old_expression(expr: &Expr, result: &mut Result<(), TokenStream>) -> Option<Expr> {
-      if let Expr::Call(call) = expr {
-        expr_call_old_expression(call, result)
-      } else {
         None
+      }
+      fn expr_old_expression(&mut self, expr: &Expr) -> Option<Expr> {
+        if let Expr::Call(call) = expr {
+          self.expr_call_old_expression(call)
+        } else {
+          None
+        }
       }
     }
 
-    impl VisitMut for CollectOldExpressions {
+    impl<'a> VisitMut for CollectOldExpressions<'a> {
       fn visit_expr_mut(&mut self, expr: &mut Expr) {
-        if let Some(old_expression) = expr_old_expression(expr, &mut self.result) {
+        if let Some(old_expression) = self.expr_old_expression(expr) {
           ForbidRecursiveOldExpressions {
             result: &mut self.result,
           }
