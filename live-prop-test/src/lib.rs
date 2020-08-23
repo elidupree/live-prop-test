@@ -220,9 +220,15 @@ pub struct TestsSetup {
 }
 
 #[derive(Debug)]
+struct PostconditionFailure {
+  postcondition: &'static str,
+  message: String,
+}
+
+#[derive(Debug)]
 pub struct TestsFinisher<A> {
   shared_setup_data: Option<(A, Duration)>,
-  failures: Vec<String>,
+  failures: Vec<PostconditionFailure>,
 }
 
 #[derive(Debug)]
@@ -291,14 +297,20 @@ impl TestsSetup {
   }
 }
 
-impl<A> TestsFinisher<A> {
+impl<A> TestsFinisher<A>
+where
+  for<'a> &'a A: IntoIterator<Item = &'a String>,
+{
   pub fn finish_test<T>(
     &mut self,
     history: &TestHistory,
     temporaries: TestTemporaries<T>,
-    finish: impl FnOnce(T, &A) -> Result<(), String>,
+    name: &'static str,
+    finish: impl FnOnce(T) -> Result<(), String>,
   ) {
-    if let Some((shared_setup_data, shared_setup_time_taken)) = &self.shared_setup_data {
+    if let Some((_parameter_value_representations, shared_setup_time_taken)) =
+      &self.shared_setup_data
+    {
       if let Some(TestTemporariesInner {
         setup_data,
         setup_time_taken,
@@ -308,7 +320,7 @@ impl<A> TestsFinisher<A> {
         let test_result = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
           in_test.set(true);
           defer!(in_test.set(false));
-          (finish)(setup_data, shared_setup_data)
+          (finish)(setup_data)
         });
 
         let finishing_time_taken = throttling_internals::thread_time() - start_time;
@@ -321,88 +333,101 @@ impl<A> TestsFinisher<A> {
         history.cell.borrow_mut().test_completed(total_time_taken);
 
         if let Err(message) = test_result {
-          self.failures.push(message);
+          self.failures.push(PostconditionFailure {
+            postcondition: name,
+            message,
+          });
         }
       }
     }
   }
 
-  pub fn finish(self) {
-    if !self.failures.is_empty() {
-      let combined_message = self.failures.join("");
-      if global_config().panic_on_errors {
-        panic!("{}", combined_message);
-      } else {
-        log::error!("{}", combined_message);
-      }
-    }
-  }
-}
+  pub fn finish(
+    self,
+    function_module_path: &str,
+    function_name: &str,
+    parameter_display_meta: &'static [TestArgumentDisplayMeta],
+  ) {
+    if let Some((parameter_value_representations, _shared_setup_time_taken)) =
+      &self.shared_setup_data
+    {
+      if !self.failures.is_empty() {
+        let mut assembled: String = format!(
+          "live-prop-test postcondition failure:\n  Function: {}::{}\n  Arguments:\n",
+          function_module_path, function_name
+        );
+        for (display_meta, value) in parameter_display_meta
+          .iter()
+          .zip(parameter_value_representations)
+        {
+          writeln!(&mut assembled, "    {}: {}", display_meta.name, value).unwrap();
+        }
 
-pub fn detailed_failure_message(
-  function_module_path: &str,
-  function_name: &str,
-  test_function_path: &str,
-  arguments: &[TestArgumentRepresentation],
-  failure_message: &str,
-) -> String {
-  let mut assembled: String = format!(
-    "live-prop-test failure:\n  Function: {}::{}\n  Test function: {}\n  Arguments:\n",
-    function_module_path, function_name, test_function_path
-  );
-  for argument in arguments {
-    writeln!(&mut assembled, "    {}: {}", argument.name, argument.value).unwrap();
-  }
-  write!(&mut assembled, "  Failure message: {}\n\n", failure_message).unwrap();
+        writeln!(&mut assembled).unwrap();
 
-  if !global_config().for_unit_tests {
-    #[allow(clippy::write_with_newline)]
-    write!(
-      &mut assembled,
-      "  Suggested regression test:\n
+        for failure in self.failures {
+          write!(
+            &mut assembled,
+            "  Failing postcondition: {}\n  Failed with message: {}\n\n",
+            failure.postcondition, failure.message
+          )
+          .unwrap();
+        }
+
+        if !global_config().for_unit_tests {
+          #[allow(clippy::write_with_newline)]
+          write!(
+            &mut assembled,
+            "  Suggested regression test:\n
 // NOTE: This suggested code is provided as a convenience,
 // but it is not guaranteed to be correct, or even to compile.
 // Arguments are written as their Debug representations,
 // which may need to be changed to become valid code.
 // If the function observes any other data in addition to its arguments,
-// you'll need to code your own method of recording and replaying that data.
+// you'll need to implement your own method of recording and replaying that data.
 #[test]
 fn {}_regression() {{
   live_prop_test::initialize_for_unit_tests();
   
 ",
-      function_name
-    )
-    .unwrap();
+            function_name
+          )
+          .unwrap();
 
-    const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-    for argument in arguments {
-      if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-        writeln!(
-          &mut assembled,
-          "  let {} = {};\n",
-          argument.name, argument.value
-        )
-        .unwrap();
+          const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
+          for (display_meta, value) in parameter_display_meta
+            .iter()
+            .zip(parameter_value_representations)
+          {
+            if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+              writeln!(&mut assembled, "  let {} = {};\n", display_meta.name, value).unwrap();
+            }
+          }
+          write!(&mut assembled, "  {}(", function_name).unwrap();
+
+          let passed_arguments: Vec<String> = parameter_display_meta
+            .iter()
+            .zip(parameter_value_representations)
+            .map(|(display_meta, value)| {
+              let owned = if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+                display_meta.name
+              } else {
+                &*value
+              };
+              format!("{}{}", display_meta.prefix, owned)
+            })
+            .collect();
+          write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
+        }
+
+        if global_config().panic_on_errors {
+          panic!("{}", assembled);
+        } else {
+          log::error!("{}", assembled);
+        }
       }
     }
-    write!(&mut assembled, "  {}(", function_name).unwrap();
-
-    let passed_arguments: Vec<String> = arguments
-      .iter()
-      .map(|argument| {
-        let owned = if argument.value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-          argument.name
-        } else {
-          &*argument.value
-        };
-        format!("{}{}", argument.prefix, owned)
-      })
-      .collect();
-    write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
   }
-
-  assembled
 }
 
 mod throttling_internals;
@@ -456,8 +481,7 @@ pub struct TestResult {
 
 #[doc(hidden)]
 #[derive(Debug)]
-pub struct TestArgumentRepresentation<'a> {
+pub struct TestArgumentDisplayMeta {
   pub name: &'static str,
-  pub value: &'a str,
   pub prefix: &'static str,
 }

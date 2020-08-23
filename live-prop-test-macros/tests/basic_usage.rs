@@ -35,9 +35,7 @@ fn test_exp2_works() {
 }
 
 #[test]
-#[should_panic(expected = "  Arguments:
-    exponent: 4
-  Failure message: assertion failed: `(left == right)`")]
+#[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_wrong_fails() {
   ::live_prop_test::initialize_for_internal_tests();
   exp2_wrong(4);
@@ -160,27 +158,21 @@ fn test_exp2_field<'a>(
 }
 
 #[test]
-#[should_panic(expected = "  Arguments:
-    object: Fielded { field: 4 }
-  Failure message: assertion failed: `(left == right)`")]
+#[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_field_fails() {
   ::live_prop_test::initialize_for_internal_tests();
   exp2_field(&mut Fielded { field: 4 });
 }
 
 #[test]
-#[should_panic(expected = "  Arguments:
-    self: Fielded { field: 4 }
-  Failure message: assertion failed: `(left == right)`")]
+#[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_field_inherent_method_fails() {
   ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field();
 }
 
 #[test]
-#[should_panic(expected = "  Arguments:
-    self: Fielded { field: 4 }
-  Failure message: assertion failed: `(left == right)`")]
+#[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_field_trait_method_fails() {
   ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field_trait_method();

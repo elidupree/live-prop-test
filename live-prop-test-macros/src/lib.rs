@@ -245,17 +245,6 @@ fn live_prop_test_function(
       )
     })
     .collect();
-  let argument_representation_identifiers: Vec<_> = (0..num_parameters as u32)
-    .map(|index| {
-      Ident::new(
-        &format!(
-          "__live_prop_test_argument_representation_identifier_{}",
-          index
-        ),
-        Span::call_site(),
-      )
-    })
-    .collect();
 
   // note that because the inner function is defined inside the outer function, it doesn't pollute the outer namespace, but we are still obligated to avoid polluting the inner namespace, so we give it a name that won't collide by coincidence
   let name_for_inner_function = Ident::new(
@@ -291,17 +280,6 @@ fn live_prop_test_function(
     }
   };
 
-  let augmented_parameter_value_representations = quote! {{
-    let (#(#argument_representation_identifiers),*) = parameter_value_representations;
-    [#(
-      ::live_prop_test::TestArgumentRepresentation {
-        name: ::std::stringify!(#parameter_values_vec),
-        value: #argument_representation_identifiers,
-        prefix: #parameter_regression_prefixes,
-      }
-    ),*]
-  }};
-
   let result = vec![
     parse_quote!(
       #[cfg(not(debug_assertions))]
@@ -336,7 +314,8 @@ fn live_prop_test_function(
 
           let mut finisher = setup.finish_setup (|| {
             use ::live_prop_test::NoDebugFallback;
-            (#(#parameter_value_representations),*)
+            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(#parameter_value_representations),*];
+            parameter_value_representations
           });
 
           let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
@@ -345,23 +324,23 @@ fn live_prop_test_function(
             finisher.finish_test(
               & histories [#test_function_indices],
               #test_temporaries_identifiers,
-              | test_closure, parameter_value_representations | {
-                let test_result: ::std::result::Result<(), ::std::string::String> = (test_closure)(#pass_through_values);
-
-                test_result.map_err (| message | {
-                  ::live_prop_test::detailed_failure_message (
-                    ::std::module_path!(),
-                    ::std::stringify! (#function_name),
-                    ::std::stringify! (#test_function_paths),
-                    & #augmented_parameter_value_representations,
-                    & message,
-                  )
-                })
+              ::std::stringify! (#test_function_paths),
+              | test_closure | {
+                (test_closure)(#pass_through_values)
               }
             );
           ) *
 
-          finisher.finish();
+          finisher.finish(
+            ::std::module_path!(),
+            ::std::stringify! (#function_name),
+            & [#(
+              ::live_prop_test::TestArgumentDisplayMeta {
+                name: ::std::stringify!(#parameter_values_vec),
+                prefix: #parameter_regression_prefixes,
+              }
+            ),*],
+          );
 
           result
         })
