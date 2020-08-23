@@ -1,0 +1,5 @@
+error: it doesn't make sense to use `old` inside another `old` expression
+ --> $DIR/old_inside_old.rs:3:34
+  |
+3 | #[live_prop_test(postcondition = "old(old(true))")]
+  |                                  ^^^^^^^^^^^^^^^^

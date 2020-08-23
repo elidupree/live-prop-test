@@ -1,0 +1,5 @@
+error: `old` can only have one "argument"
+ --> $DIR/old_multiple_arguments.rs:3:34
+  |
+3 | #[live_prop_test(postcondition = "old(true, true)")]
+  |                                  ^^^^^^^^^^^^^^^^^
