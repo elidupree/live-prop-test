@@ -82,67 +82,59 @@ struct Fielded {
   field: i32,
 }
 
-/*
-#[live_prop_test(test_exp2_field)]
+#[live_prop_test(postcondition = "test_exp2(old(object.field), object.field)")]
 fn exp2_field(object: &mut Fielded) {
+  object.field = 1 << object.field
+}
+
+#[live_prop_test(postcondition = "test_exp2(old(object.field), object.field)")]
+fn exp2_field_wrong(object: &mut Fielded) {
   object.field = 2 << object.field
 }
 
 #[live_prop_test]
 impl Fielded {
-  #[live_prop_test(test_exp2_field)]
-  fn exp2_field(#[live_prop_test(pass_through)] &mut self) {
+  #[live_prop_test(postcondition = "test_exp2(old(self.field), self.field)")]
+  fn exp2_field_wrong(&mut self) {
     self.field = 2 << self.field
   }
 }
 
 trait Exp2Field {
-  fn exp2_field_trait_method(&mut self);
+  fn exp2_field_wrong_trait_method(&mut self);
 }
 
 #[live_prop_test]
 impl Exp2Field for Fielded {
-  #[live_prop_test(test_exp2_field)]
-  fn exp2_field_trait_method(#[live_prop_test(pass_through)] &mut self) {
+  #[live_prop_test(postcondition = "test_exp2(old(self.field), self.field)")]
+  fn exp2_field_wrong_trait_method(&mut self) {
     self.field = 2 << self.field
   }
 }
 
-fn test_exp2_field<'a>(
-  object: &Fielded,
-) -> ::std::result::Result<(), ::std::string::String> + 'a
-{
-  let old_value = object.field;
-  move |object, _| {
-    lpt_assert_eq!(
-      object.field,
-      ::std::iter::Iterator::product::<i32>(::std::iter::Iterator::take(
-        ::std::iter::repeat(2),
-        old_value as usize
-      ))
-    );
-    ::std::result::Result::Ok(())
-  }
-}
-
 #[test]
-#[should_panic(expected = "assertion failed: `(left == right)`")]
-fn test_exp2_field_fails() {
+fn test_exp2_field_works() {
   ::live_prop_test::initialize_for_internal_tests();
   exp2_field(&mut Fielded { field: 4 });
 }
 
 #[test]
 #[should_panic(expected = "assertion failed: `(left == right)`")]
-fn test_exp2_field_inherent_method_fails() {
+fn test_exp2_field_wrong_fails() {
   ::live_prop_test::initialize_for_internal_tests();
-  (Fielded { field: 4 }).exp2_field();
+  exp2_field_wrong(&mut Fielded { field: 4 });
 }
 
 #[test]
 #[should_panic(expected = "assertion failed: `(left == right)`")]
-fn test_exp2_field_trait_method_fails() {
+fn test_exp2_field_wrong_inherent_method_fails() {
   ::live_prop_test::initialize_for_internal_tests();
-  (Fielded { field: 4 }).exp2_field_trait_method();
+  (Fielded { field: 4 }).exp2_field_wrong();
 }
-*/
+
+#[test]
+#[should_panic(expected = "assertion failed: `(left == right)`")]
+fn test_exp2_field_wrong_trait_method_fails() {
+  ::live_prop_test::initialize_for_internal_tests();
+  (Fielded { field: 4 }).exp2_field_wrong_trait_method();
+}

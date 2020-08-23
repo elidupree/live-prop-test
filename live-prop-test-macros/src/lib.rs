@@ -4,9 +4,15 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{quote, quote_spanned};
 use syn::{
-  parse::Parser, parse_quote, punctuated::Punctuated, spanned::Spanned, Attribute, Expr, FnArg,
-  GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod, ItemImpl, ItemMacro, Lit, Meta,
-  MetaNameValue, NestedMeta, Pat, PatIdent, Signature, Stmt, Token, Type,
+  parse::Parser,
+  parse_quote,
+  punctuated::Punctuated,
+  spanned::Spanned,
+  visit::{self, Visit},
+  visit_mut::{self, VisitMut},
+  Attribute, Expr, ExprCall, FnArg, GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod,
+  ItemImpl, ItemMacro, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Signature, Stmt, Token,
+  Type,
 };
 
 /// caveat about Self and generic parameters of the containing impl
@@ -115,7 +121,7 @@ fn live_prop_test_function(
     .into_iter()
     .enumerate()
     .map(|(index, attribute)| attribute.bundle(index))
-    .collect();
+    .collect::<Result<_, _>>()?;
   let history_declarations = test_bundles.iter().map(|bundle| &bundle.history);
   let setup_statements = test_bundles.iter().map(|bundle| &bundle.setup);
   let finish_statements = test_bundles.iter().map(|bundle| &bundle.finish);
@@ -409,7 +415,7 @@ impl TestAttribute {
     Ok(result)
   }
 
-  fn bundle(self, unique_id: usize) -> TestBundle {
+  fn bundle(self, unique_id: usize) -> Result<TestBundle, TokenStream> {
     let history_identifier = Ident::new(
       &format!("__LIVE_PROP_TEST_HISTORY_{}", unique_id),
       Span::call_site(),
@@ -435,10 +441,95 @@ impl TestAttribute {
       .preconditions
       .into_iter()
       .map(evaluate_and_record_failures);
-    let postconditions = self
+
+    struct CollectOldExpressions {
+      old_expressions: Vec<Expr>,
+      old_identifiers: Vec<Ident>,
+      next_index: usize,
+      result: Result<(), TokenStream>,
+    }
+
+    struct ForbidRecursiveOldExpressions<'a> {
+      result: &'a mut Result<(), TokenStream>,
+    }
+
+    let mut collector = CollectOldExpressions {
+      old_expressions: Vec::new(),
+      old_identifiers: Vec::new(),
+      next_index: 0,
+      result: Ok(()),
+    };
+
+    impl<'a> Visit<'a> for ForbidRecursiveOldExpressions<'a> {
+      fn visit_expr_call(&mut self, call: &'a ExprCall) {
+        if let Expr::Path(path) = &*call.func {
+          if path.path.is_ident("old") {
+            *self.result = Err (quote_spanned! {call.span()=> compile_error!(r#"it doesn't make sense to use `old` inside another `old` expression"#);}.into());
+          }
+        }
+        visit::visit_expr_call(self, call);
+      }
+    }
+
+    fn expr_call_old_expression(
+      call: &ExprCall,
+      result: &mut Result<(), TokenStream>,
+    ) -> Option<Expr> {
+      if let Expr::Path(path) = &*call.func {
+        if path.path.is_ident("old") {
+          if let Some(first) = call.args.first() {
+            if call.args.len() > 1 {
+              *result = Err (quote_spanned! {call.span()=> compile_error!(r#"`old` can only have one "argument""#);}.into());
+            } else {
+              return Some(first.clone());
+            }
+          } else {
+            *result = Err (quote_spanned! {call.span()=> compile_error!(r#"`old` requires an expression as its "argument""#);}.into());
+          }
+        }
+      }
+      None
+    }
+    fn expr_old_expression(expr: &Expr, result: &mut Result<(), TokenStream>) -> Option<Expr> {
+      if let Expr::Call(call) = expr {
+        expr_call_old_expression(call, result)
+      } else {
+        None
+      }
+    }
+
+    impl VisitMut for CollectOldExpressions {
+      fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        if let Some(old_expression) = expr_old_expression(expr, &mut self.result) {
+          ForbidRecursiveOldExpressions {
+            result: &mut self.result,
+          }
+          .visit_expr(&old_expression);
+          let old_identifier = Ident::new(
+            &format!("__live_prop_test_old_value_{}", self.next_index),
+            expr.span(),
+          );
+          *expr = parse_quote! (#old_identifier);
+          self.old_identifiers.push(old_identifier);
+          self.old_expressions.push(old_expression);
+        } else {
+          visit_mut::visit_expr_mut(self, expr);
+        }
+      }
+    }
+
+    let postconditions: Vec<_> = self
       .postconditions
       .into_iter()
-      .map(evaluate_and_record_failures);
+      .map(|mut postcondition| {
+        collector.visit_expr_mut(&mut postcondition);
+        evaluate_and_record_failures(postcondition)
+      })
+      .collect();
+
+    collector.result?;
+    let old_expressions = collector.old_expressions;
+    let old_identifiers = collector.old_identifiers;
 
     let history = parse_quote!(::std::thread_local! {
       static #history_identifier: ::live_prop_test::TestHistory = ::live_prop_test::TestHistory::new();
@@ -450,6 +541,7 @@ impl TestAttribute {
           __live_prop_test_history,
           | __live_prop_test_failures | {
             #(#preconditions) *
+            (#(#old_expressions,)*)
           }
         )
       });
@@ -460,18 +552,18 @@ impl TestAttribute {
         __live_prop_test_finisher.finish_test(
           __live_prop_test_history,
           #test_temporaries_identifier,
-          | __live_prop_test_temporaries, __live_prop_test_failures | {
+          | (#(#old_identifiers,)*), __live_prop_test_failures | {
             #(#postconditions) *
           }
         )
       });
     );
 
-    TestBundle {
+    Ok(TestBundle {
       history,
       setup,
       finish,
-    }
+    })
   }
 }
 
