@@ -239,7 +239,7 @@ pub struct TestsSetup {
 
 #[derive(Debug)]
 pub struct TestFailure {
-  pub test: &'static str,
+  pub test: String,
   pub failure_message: Option<String>,
 }
 
@@ -373,42 +373,70 @@ where
     if let Some((parameter_value_representations, _shared_setup_time_taken)) =
       &self.shared_setup_data
     {
-      if !self.failures.is_empty() {
-        let mut assembled: String = format!(
-          "live-prop-test postcondition failure:\n  Function: {}::{}\n  Arguments:\n",
-          function_module_path, function_name
-        );
-        for (display_meta, value) in parameter_display_meta
-          .iter()
-          .zip(parameter_value_representations)
-        {
-          writeln!(&mut assembled, "    {}: {}", display_meta.name, value).unwrap();
-        }
+      announce_failures(
+        function_module_path,
+        function_name,
+        parameter_display_meta,
+        parameter_value_representations,
+        &self.failures,
+        "postcondition",
+      )
+    }
+  }
+}
 
-        writeln!(&mut assembled).unwrap();
+fn announce_failures<A>(
+  function_module_path: &str,
+  function_name: &str,
+  parameter_display_meta: &'static [TestArgumentDisplayMeta],
+  parameter_value_representations: &A,
+  failures: &[TestFailure],
+  condition_type: &str,
+) where
+  for<'a> &'a A: IntoIterator<Item = &'a String>,
+{
+  if !failures.is_empty() {
+    let mut assembled: String = format!(
+      "live-prop-test {} failure:\n  Function: {}::{}\n  Arguments:\n",
+      condition_type, function_module_path, function_name
+    );
+    for (display_meta, value) in parameter_display_meta
+      .iter()
+      .zip(parameter_value_representations)
+    {
+      writeln!(&mut assembled, "    {}: {}", display_meta.name, value).unwrap();
+    }
 
-        if self.failures.len() >= 2 {
-          write!(
-            &mut assembled,
-            "{} postconditions failed:\n\n",
-            self.failures.len()
-          )
-          .unwrap();
-        }
+    writeln!(&mut assembled).unwrap();
 
-        for failure in self.failures {
-          writeln!(&mut assembled, "  Failing postcondition: {}", failure.test).unwrap();
-          if let Some(message) = failure.failure_message {
-            writeln!(&mut assembled, "  Failed with message: {}", message).unwrap();
-          }
-          writeln!(&mut assembled).unwrap();
-        }
+    if failures.len() >= 2 {
+      write!(
+        &mut assembled,
+        "{} {}s failed:\n\n",
+        failures.len(),
+        condition_type
+      )
+      .unwrap();
+    }
 
-        if !global_config().for_unit_tests {
-          #[allow(clippy::write_with_newline)]
-          write!(
-            &mut assembled,
-            "  Suggested regression test:\n
+    for failure in failures {
+      writeln!(
+        &mut assembled,
+        "  Failing {}: {}",
+        condition_type, failure.test
+      )
+      .unwrap();
+      if let Some(message) = &failure.failure_message {
+        writeln!(&mut assembled, "  Failed with message: {}", message).unwrap();
+      }
+      writeln!(&mut assembled).unwrap();
+    }
+
+    if !global_config().for_unit_tests {
+      #[allow(clippy::write_with_newline)]
+      write!(
+        &mut assembled,
+        "  Suggested regression test:\n
 // NOTE: This suggested code is provided as a convenience,
 // but it is not guaranteed to be correct, or even to compile.
 // Arguments are written as their Debug representations,
@@ -420,42 +448,40 @@ fn {}_regression() {{
   live_prop_test::initialize_for_unit_tests();
   
 ",
-            function_name
-          )
-          .unwrap();
+        function_name
+      )
+      .unwrap();
 
-          const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-          for (display_meta, value) in parameter_display_meta
-            .iter()
-            .zip(parameter_value_representations)
-          {
-            if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-              writeln!(&mut assembled, "  let {} = {};\n", display_meta.name, value).unwrap();
-            }
-          }
-          write!(&mut assembled, "  {}(", function_name).unwrap();
-
-          let passed_arguments: Vec<String> = parameter_display_meta
-            .iter()
-            .zip(parameter_value_representations)
-            .map(|(display_meta, value)| {
-              let owned = if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
-                display_meta.name
-              } else {
-                &*value
-              };
-              format!("{}{}", display_meta.prefix, owned)
-            })
-            .collect();
-          write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
-        }
-
-        if global_config().panic_on_errors {
-          panic!("{}", assembled);
-        } else {
-          log::error!("{}", assembled);
+      const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
+      for (display_meta, value) in parameter_display_meta
+        .iter()
+        .zip(parameter_value_representations)
+      {
+        if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+          writeln!(&mut assembled, "  let {} = {};\n", display_meta.name, value).unwrap();
         }
       }
+      write!(&mut assembled, "  {}(", function_name).unwrap();
+
+      let passed_arguments: Vec<String> = parameter_display_meta
+        .iter()
+        .zip(parameter_value_representations)
+        .map(|(display_meta, value)| {
+          let owned = if value.len() > MAX_INLINE_ARGUMENT_LENGTH {
+            display_meta.name
+          } else {
+            &*value
+          };
+          format!("{}{}", display_meta.prefix, owned)
+        })
+        .collect();
+      write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
+    }
+
+    if global_config().panic_on_errors {
+      panic!("{}", assembled);
+    } else {
+      log::error!("{}", assembled);
     }
   }
 }

@@ -328,7 +328,7 @@ fn live_prop_test_function(
                 let result = (test_closure)(#pass_through_values);
                 if let ::std::result::Result::Err(failure_message) = ::live_prop_test::LivePropTestResult::canonicalize(result) {
                   failures.fail_test (::live_prop_test::TestFailure {
-                    test: ::std::stringify! (#test_function_paths),
+                    test: <::std::string::String as ::std::convert::From<&str>>::from(::std::stringify! (#test_function_paths)),
                     failure_message,
                   })
                 }
