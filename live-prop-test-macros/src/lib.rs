@@ -302,21 +302,35 @@ fn live_prop_test_function(
           static HISTORIES: [::live_prop_test::TestHistory; #num_test_functions] = [#test_history_initializers];
         }
 
+        const __LIVE_PROP_TEST_DISPLAY_META: ::live_prop_test::TestFunctionDisplayMeta = ::live_prop_test::TestFunctionDisplayMeta {
+          module_path: ::std::module_path!(),
+          name: ::std::stringify! (#function_name),
+          parameters: & [#(
+            ::live_prop_test::TestArgumentDisplayMeta {
+              name: ::std::stringify!(#parameter_values_vec),
+              prefix: #parameter_regression_prefixes,
+            }
+          ),*],
+        };
+
         HISTORIES.with (| histories | {
           let mut setup = ::live_prop_test::TestsSetup::new();
           #(
             let #test_temporaries_identifiers = setup.setup_test (
               & histories [#test_function_indices],
-              || #test_function_paths::<#generic_parameter_values>(#parameter_value_references)
+              |_| #test_function_paths::<#generic_parameter_values>(#parameter_value_references)
             );
           ) *
 
 
-          let mut finisher = setup.finish_setup (|| {
-            use ::live_prop_test::NoDebugFallback;
-            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(#parameter_value_representations),*];
-            parameter_value_representations
-          });
+          let mut finisher = setup.finish_setup (
+            __LIVE_PROP_TEST_DISPLAY_META,
+            || {
+              use ::live_prop_test::NoDebugFallback;
+              let parameter_value_representations: [::std::string::String; #num_parameters] = [#(#parameter_value_representations),*];
+              parameter_value_representations
+            }
+          );
 
           let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
 
@@ -336,16 +350,7 @@ fn live_prop_test_function(
             );
           ) *
 
-          finisher.finish(
-            ::std::module_path!(),
-            ::std::stringify! (#function_name),
-            & [#(
-              ::live_prop_test::TestArgumentDisplayMeta {
-                name: ::std::stringify!(#parameter_values_vec),
-                prefix: #parameter_regression_prefixes,
-              }
-            ),*],
-          );
+          finisher.finish(__LIVE_PROP_TEST_DISPLAY_META);
 
           result
         })

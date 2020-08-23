@@ -235,6 +235,7 @@ macro_rules! lpt_assert_ne {
 #[derive(Debug)]
 pub struct TestsSetup {
   any_tests_running: bool,
+  failures: Vec<TestFailure>,
 }
 
 #[derive(Debug)]
@@ -275,22 +276,24 @@ impl TestsSetup {
     throttling_internals::global_update_if_needed();
     TestsSetup {
       any_tests_running: false,
+      failures: Vec::new(),
     }
   }
   pub fn setup_test<T>(
     &mut self,
     history: &TestHistory,
-    test_setup: impl FnOnce() -> T,
+    test_setup: impl FnOnce(&mut TestFailuresCollector) -> T,
   ) -> TestTemporaries<T> {
     let data = if EXECUTION_IS_INSIDE_TEST.with(|in_test| !in_test.get())
       && history.cell.borrow_mut().roll_to_test()
     {
       self.any_tests_running = true;
       let start_time = throttling_internals::thread_time();
+      let failures = &mut self.failures;
       let setup_data = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
         in_test.set(true);
         defer!(in_test.set(false));
-        (test_setup)()
+        (test_setup)(&mut TestFailuresCollector { failures })
       });
       Some(TestTemporariesInner {
         setup_data,
@@ -301,12 +304,25 @@ impl TestsSetup {
     };
     TestTemporaries { data }
   }
-  pub fn finish_setup<A>(self, shared_setup: impl FnOnce() -> A) -> TestsFinisher<A> {
+  pub fn finish_setup<A>(
+    self,
+    function_display_meta: TestFunctionDisplayMeta,
+    make_parameter_value_representations: impl FnOnce() -> A,
+  ) -> TestsFinisher<A>
+  where
+    for<'a> &'a A: IntoIterator<Item = &'a String>,
+  {
     let shared_setup_data = if self.any_tests_running {
       let start_time = throttling_internals::thread_time();
-      let shared_setup_data = (shared_setup)();
+      let parameter_value_representations = (make_parameter_value_representations)();
+      announce_failures(
+        function_display_meta,
+        &parameter_value_representations,
+        &self.failures,
+        "postcondition",
+      );
       Some((
-        shared_setup_data,
+        parameter_value_representations,
         throttling_internals::thread_time() - start_time,
       ))
     } else {
@@ -364,31 +380,22 @@ where
     }
   }
 
-  pub fn finish(
-    self,
-    function_module_path: &str,
-    function_name: &str,
-    parameter_display_meta: &'static [TestArgumentDisplayMeta],
-  ) {
+  pub fn finish(self, function_display_meta: TestFunctionDisplayMeta) {
     if let Some((parameter_value_representations, _shared_setup_time_taken)) =
       &self.shared_setup_data
     {
       announce_failures(
-        function_module_path,
-        function_name,
-        parameter_display_meta,
+        function_display_meta,
         parameter_value_representations,
         &self.failures,
         "postcondition",
-      )
+      );
     }
   }
 }
 
 fn announce_failures<A>(
-  function_module_path: &str,
-  function_name: &str,
-  parameter_display_meta: &'static [TestArgumentDisplayMeta],
+  function_display_meta: TestFunctionDisplayMeta,
   parameter_value_representations: &A,
   failures: &[TestFailure],
   condition_type: &str,
@@ -398,9 +405,10 @@ fn announce_failures<A>(
   if !failures.is_empty() {
     let mut assembled: String = format!(
       "live-prop-test {} failure:\n  Function: {}::{}\n  Arguments:\n",
-      condition_type, function_module_path, function_name
+      condition_type, function_display_meta.module_path, function_display_meta.name
     );
-    for (display_meta, value) in parameter_display_meta
+    for (display_meta, value) in function_display_meta
+      .parameters
       .iter()
       .zip(parameter_value_representations)
     {
@@ -448,12 +456,13 @@ fn {}_regression() {{
   live_prop_test::initialize_for_unit_tests();
   
 ",
-        function_name
+        function_display_meta.name
       )
       .unwrap();
 
       const MAX_INLINE_ARGUMENT_LENGTH: usize = 10;
-      for (display_meta, value) in parameter_display_meta
+      for (display_meta, value) in function_display_meta
+        .parameters
         .iter()
         .zip(parameter_value_representations)
       {
@@ -461,9 +470,10 @@ fn {}_regression() {{
           writeln!(&mut assembled, "  let {} = {};\n", display_meta.name, value).unwrap();
         }
       }
-      write!(&mut assembled, "  {}(", function_name).unwrap();
+      write!(&mut assembled, "  {}(", function_display_meta.name).unwrap();
 
-      let passed_arguments: Vec<String> = parameter_display_meta
+      let passed_arguments: Vec<String> = function_display_meta
+        .parameters
         .iter()
         .zip(parameter_value_representations)
         .map(|(display_meta, value)| {
@@ -540,4 +550,12 @@ pub struct TestResult {
 pub struct TestArgumentDisplayMeta {
   pub name: &'static str,
   pub prefix: &'static str,
+}
+
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct TestFunctionDisplayMeta {
+  pub module_path: &'static str,
+  pub name: &'static str,
+  pub parameters: &'static [TestArgumentDisplayMeta],
 }
