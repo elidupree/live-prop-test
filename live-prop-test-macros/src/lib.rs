@@ -164,7 +164,6 @@ fn live_prop_test_function(
   let mut parameters = parameters.clone();
   let mut parameter_values: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut pass_through_values: Punctuated<Expr, Token![,]> = Punctuated::new();
-  let mut parameter_value_references: Punctuated<Expr, Token![,]> = Punctuated::new();
   let mut parameter_value_representations: Vec<Expr> = Vec::new();
   let mut parameter_regression_prefixes: Vec<Expr> = Vec::new();
 
@@ -204,7 +203,6 @@ fn live_prop_test_function(
       parameter_value_representations
         .push(parse_quote! { ::live_prop_test::MaybeDebug(&#parameter_value).__live_prop_test_represent() })
     }
-    parameter_value_references.push(parse_quote! {& #parameter_value});
     if config.pass_through {
       pass_through_values.push(parameter_value.clone());
     }
