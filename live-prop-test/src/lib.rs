@@ -48,6 +48,24 @@ pub fn mock_sleep(duration: Duration) {
   MOCK_TIME.with(|a| *a.borrow_mut() += duration)
 }
 
+pub trait LivePropTestResult {
+  fn canonicalize(self) -> Result<(), Option<String>>;
+}
+
+impl LivePropTestResult for bool {
+  fn canonicalize(self) -> Result<(), Option<String>> {
+    match self {
+      true => Ok(()),
+      false => Err(None),
+    }
+  }
+}
+impl LivePropTestResult for Result<(), String> {
+  fn canonicalize(self) -> Result<(), Option<String>> {
+    self.map_err(Some)
+  }
+}
+
 #[derive(Debug)]
 pub struct LivePropTestConfig {
   initialized_explicitly: bool,
@@ -222,7 +240,7 @@ pub struct TestsSetup {
 #[derive(Debug)]
 struct PostconditionFailure {
   postcondition: &'static str,
-  message: String,
+  message: Option<String>,
 }
 
 #[derive(Debug)]
@@ -301,12 +319,12 @@ impl<A> TestsFinisher<A>
 where
   for<'a> &'a A: IntoIterator<Item = &'a String>,
 {
-  pub fn finish_test<T>(
+  pub fn finish_test<T, R: LivePropTestResult>(
     &mut self,
     history: &TestHistory,
     temporaries: TestTemporaries<T>,
     name: &'static str,
-    finish: impl FnOnce(T) -> Result<(), String>,
+    finish: impl FnOnce(T) -> R,
   ) {
     if let Some((_parameter_value_representations, shared_setup_time_taken)) =
       &self.shared_setup_data
@@ -332,7 +350,7 @@ where
         );*/
         history.cell.borrow_mut().test_completed(total_time_taken);
 
-        if let Err(message) = test_result {
+        if let Err(message) = test_result.canonicalize() {
           self.failures.push(PostconditionFailure {
             postcondition: name,
             message,
@@ -375,12 +393,16 @@ where
         }
 
         for failure in self.failures {
-          write!(
+          writeln!(
             &mut assembled,
-            "  Failing postcondition: {}\n  Failed with message: {}\n\n",
-            failure.postcondition, failure.message
+            "  Failing postcondition: {}",
+            failure.postcondition
           )
           .unwrap();
+          if let Some(message) = failure.message {
+            writeln!(&mut assembled, "  Failed with message: {}", message).unwrap();
+          }
+          writeln!(&mut assembled).unwrap();
         }
 
         if !global_config().for_unit_tests {
