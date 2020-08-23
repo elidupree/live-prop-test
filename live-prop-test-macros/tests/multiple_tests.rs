@@ -64,6 +64,13 @@ fn test_double_same_attribute_not_bigger() {
 }
 
 #[test]
+#[should_panic(expected = "2 postconditions failed")]
+fn test_double_same_attribute_not_either() {
+  ::live_prop_test::initialize_for_internal_tests();
+  double_same_attribute(-5);
+}
+
+#[test]
 #[should_panic(expected = "is_even")]
 fn test_double_separate_attributes_not_even() {
   ::live_prop_test::initialize_for_internal_tests();

@@ -365,6 +365,15 @@ where
 
         writeln!(&mut assembled).unwrap();
 
+        if self.failures.len() >= 2 {
+          write!(
+            &mut assembled,
+            "{} postconditions failed:\n\n",
+            self.failures.len()
+          )
+          .unwrap();
+        }
+
         for failure in self.failures {
           write!(
             &mut assembled,
