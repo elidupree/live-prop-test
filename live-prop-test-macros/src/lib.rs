@@ -74,11 +74,49 @@ fn live_prop_test_impl(
 }
 
 fn live_prop_test_item_impl(
-  item_impl: ItemImpl,
+  mut item_impl: ItemImpl,
+  captured_attributes: Vec<LivePropTestAttribute>,
+) -> Result<TokenStream, TokenStream> {
+  let _live_prop_test_attributes =
+    take_live_prop_test_attributes(&mut item_impl.attrs, captured_attributes)?;
+
+  let mut new_items = Vec::with_capacity(item_impl.items.len());
+  for item in std::mem::take(&mut item_impl.items) {
+    match item {
+      ImplItem::Method(method) => {
+        if method
+          .attrs
+          .iter()
+          .any(|attr| attr.path.is_ident("live_prop_test"))
+        {
+          let replacement = live_prop_test_function(&method, Vec::new(), Some(&item_impl))?;
+          for method in replacement {
+            new_items.push(ImplItem::Method(method));
+          }
+        }
+      }
+      _ => new_items.push(item),
+    }
+  }
+
+  item_impl.items = new_items;
+
+  Ok(
+    quote! {
+      #item_impl
+    }
+    .into(),
+  )
+}
+
+/*
+fn live_prop_test_trait(item_trait: ItemTrait,
   _captured_attributes: Vec<LivePropTestAttribute>,
 ) -> Result<TokenStream, TokenStream> {
+  let _live_prop_test_attributes = take_live_prop_test_attributes(&mut item_trait.attrs, captured_attributes)?;
+
   // TODO require no arguments
-  let ItemImpl {
+  let ItemTrait {
     attrs,
     defaultness,
     unsafety,
@@ -88,6 +126,9 @@ fn live_prop_test_item_impl(
     items,
     ..
   } = &item_impl;
+
+  let mut attrs = attrs.clone();
+
 
   let mut new_items = Vec::new();
   for item in items {
@@ -120,6 +161,13 @@ fn live_prop_test_item_impl(
     .into(),
   )
 }
+
+
+}
+
+struct TestedFunctionShared {
+
+}*/
 
 fn live_prop_test_function(
   function: &ImplItemMethod,
