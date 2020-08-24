@@ -104,7 +104,6 @@ trait Exp2Field {
   fn exp2_field_wrong_trait_method(&mut self);
 }
 
-#[live_prop_test]
 impl Exp2Field for Fielded {
   #[live_prop_test(postcondition = "test_exp2(old(self.field), self.field)")]
   fn exp2_field_wrong_trait_method(&mut self) {
