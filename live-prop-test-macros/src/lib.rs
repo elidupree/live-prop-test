@@ -15,6 +15,8 @@ use syn::{
   Type,
 };
 
+type AttrArguments = Punctuated<NestedMeta, Token![,]>;
+
 /// caveat about Self and generic parameters of the containing impl
 #[proc_macro_attribute]
 pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream {
@@ -31,64 +33,72 @@ fn live_prop_test_impl(
   arguments: TokenStream,
   input: TokenStream,
 ) -> Result<TokenStream, TokenStream> {
+  let arguments: AttrArguments = Punctuated::parse_terminated
+    .parse(arguments)
+    .map_err(|e| e.to_compile_error())?;
+
   if let Ok(function) = syn::parse::<ImplItemMethod>(input.clone()) {
-    let attr_arguments: Punctuated<NestedMeta, Token![,]> = Punctuated::parse_terminated
-      .parse(arguments)
-      .map_err(|e| e.to_compile_error())?;
     let replacement =
-      live_prop_test_function(&function, vec![(attr_arguments, Span::call_site())], None)?;
+      live_prop_test_function(&function, vec![(arguments, Span::call_site())], None)?;
     Ok(quote! {#(#replacement) *}.into())
   } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input) {
-    // TODO require no arguments
-    let ItemImpl {
-      attrs,
-      defaultness,
-      unsafety,
-      generics,
-      trait_,
-      self_ty,
-      items,
-      ..
-    } = &item_impl;
-
-    let mut new_items = Vec::new();
-    for item in items {
-      match item {
-        ImplItem::Method(method) => {
-          if method
-            .attrs
-            .iter()
-            .any(|attr| attr.path.is_ident("live_prop_test"))
-          {
-            let replacement = live_prop_test_function(method, Vec::new(), Some(&item_impl))?;
-            for method in replacement {
-              new_items.push(ImplItem::Method(method));
-            }
-          }
-        }
-        _ => new_items.push(item.clone()),
-      }
-    }
-
-    let trait_ = trait_.as_ref().map(|(a, b, c)| quote!(#a #b #c));
-
-    Ok(
-      quote! {
-        #(#attrs) *
-        #defaultness #unsafety impl #generics #trait_ #self_ty {
-          #(#new_items) *
-        }
-      }
-      .into(),
-    )
+    live_prop_test_item_impl(arguments, item_impl)
   } else {
     Err(quote! {compile_error! ("#[live_prop_test] can only be applied to a fn item, an impl item, or an argument in the signature of a fn that also has the attribute");}.into())
   }
 }
 
+fn live_prop_test_item_impl(
+  _arguments: AttrArguments,
+  item_impl: ItemImpl,
+) -> Result<TokenStream, TokenStream> {
+  // TODO require no arguments
+  let ItemImpl {
+    attrs,
+    defaultness,
+    unsafety,
+    generics,
+    trait_,
+    self_ty,
+    items,
+    ..
+  } = &item_impl;
+
+  let mut new_items = Vec::new();
+  for item in items {
+    match item {
+      ImplItem::Method(method) => {
+        if method
+          .attrs
+          .iter()
+          .any(|attr| attr.path.is_ident("live_prop_test"))
+        {
+          let replacement = live_prop_test_function(method, Vec::new(), Some(&item_impl))?;
+          for method in replacement {
+            new_items.push(ImplItem::Method(method));
+          }
+        }
+      }
+      _ => new_items.push(item.clone()),
+    }
+  }
+
+  let trait_ = trait_.as_ref().map(|(a, b, c)| quote!(#a #b #c));
+
+  Ok(
+    quote! {
+      #(#attrs) *
+      #defaultness #unsafety impl #generics #trait_ #self_ty {
+        #(#new_items) *
+      }
+    }
+    .into(),
+  )
+}
+
 fn live_prop_test_function(
   function: &ImplItemMethod,
-  captured_attribute_arguments: Vec<(Punctuated<NestedMeta, Token![,]>, Span)>,
+  captured_attribute_arguments: Vec<(AttrArguments, Span)>,
   containing_impl: Option<&ItemImpl>,
 ) -> Result<Vec<ImplItemMethod>, TokenStream> {
   let ImplItemMethod {
@@ -103,7 +113,7 @@ fn live_prop_test_function(
   let mut arguments = captured_attribute_arguments;
   for attr in attrs {
     if attr.path.is_ident("live_prop_test") {
-      let attr_arguments: Punctuated<NestedMeta, Token![,]> = attr
+      let attr_arguments: AttrArguments = attr
         .parse_args_with(Punctuated::parse_terminated)
         .map_err(|e| e.to_compile_error())?;
       arguments.push((attr_arguments, attr.span()));
@@ -378,9 +388,7 @@ struct TestAttribute {
 }
 
 impl TestAttribute {
-  fn from_attr_arguments(
-    arguments: Punctuated<NestedMeta, Token![,]>,
-  ) -> Result<TestAttribute, TokenStream> {
+  fn from_attr_arguments(arguments: AttrArguments) -> Result<TestAttribute, TokenStream> {
     let mut result = TestAttribute {
       preconditions: Vec::new(),
       postconditions: Vec::new(),
