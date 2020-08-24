@@ -11,8 +11,8 @@ use syn::{
   visit::{self, Visit},
   visit_mut::{self, VisitMut},
   Attribute, Expr, ExprCall, FnArg, GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod,
-  ItemImpl, ItemMacro, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Signature, Stmt, Token,
-  Type,
+  ItemImpl, ItemMacro, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, ReturnType, Signature,
+  Stmt, Token, Type,
 };
 
 /// caveat about Self and generic parameters of the containing impl
@@ -64,7 +64,7 @@ fn live_prop_test_impl(
   }];
 
   if let Ok(function) = syn::parse::<ImplItemMethod>(input.clone()) {
-    let replacement = live_prop_test_function(&function, captured_attributes, None)?;
+    let replacement = live_prop_test_function(&function, captured_attributes)?;
     Ok(quote! {#(#replacement) *}.into())
   } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input) {
     live_prop_test_item_impl(item_impl, captured_attributes)
@@ -89,7 +89,7 @@ fn live_prop_test_item_impl(
           .iter()
           .any(|attr| attr.path.is_ident("live_prop_test"))
         {
-          let replacement = live_prop_test_function(&method, Vec::new(), Some(&item_impl))?;
+          let replacement = live_prop_test_function(&method, Vec::new())?;
           for method in replacement {
             new_items.push(ImplItem::Method(method));
           }
@@ -172,7 +172,6 @@ struct TestedFunctionShared {
 fn live_prop_test_function(
   function: &ImplItemMethod,
   captured_attributes: Vec<LivePropTestAttribute>,
-  containing_impl: Option<&ItemImpl>,
 ) -> Result<Vec<ImplItemMethod>, TokenStream> {
   let ImplItemMethod {
     attrs,
@@ -196,13 +195,11 @@ fn live_prop_test_function(
 
   let Signature {
     constness,
-    unsafety,
     asyncness,
     inputs: parameters,
     output: return_type,
     generics: syn::Generics {
       params: generic_parameters,
-      where_clause,
       ..
     },
     ident: function_name,
@@ -214,15 +211,6 @@ fn live_prop_test_function(
   }
   if let Some(asyncness) = asyncness {
     return Err(quote_spanned! {asyncness.span=> compile_error! ("live-prop-test doesn't support testing async fn items");}.into());
-  }
-  if containing_impl.is_none() {
-    if let Some(receiver) = sig.receiver() {
-      return Err(
-          quote_spanned! {
-            receiver.span()=> compile_error! ("when using live-prop-test on methods with a `self` parameter, you must also put the #[live_prop_test] attribute on the containing impl");
-          }.into(),
-        );
-    }
   }
 
   let mut parameters = parameters.clone();
@@ -310,38 +298,9 @@ fn live_prop_test_function(
   let parameter_values_vec: Vec<_> = parameter_values.iter().collect();
   let num_parameters = parameter_values.len();
 
-  // note that because the inner function is defined inside the outer function, it doesn't pollute the outer namespace, but we are still obligated to avoid polluting the inner namespace, so we give it a name that won't collide by coincidence
-  let name_for_inner_function = Ident::new(
-    &format!("__live_prop_test_original_function_for_{}", function_name),
-    function_name.span(),
-  );
-  let inner_function_definition = quote! {
-    #(#attrs) *
-    #vis #unsafety fn #name_for_inner_function<#generic_parameters> (#parameters) #return_type
-    #where_clause
-    #block
-  };
-
-  let (inner_function_definition, inner_function_call_syntax) = match containing_impl {
-    None => (inner_function_definition, quote!(#name_for_inner_function)),
-    Some(containing_impl) => {
-      let ItemImpl {
-        generics, self_ty, ..
-      } = containing_impl;
-
-      (
-        quote! {
-          trait LivePropTestOriginalFunctionExt {
-            #unsafety fn #name_for_inner_function<#generic_parameters> (#parameters) #return_type
-                #where_clause;
-          }
-          impl #generics LivePropTestOriginalFunctionExt for #self_ty {
-            #inner_function_definition
-          }
-        },
-        quote!(#self_ty::#name_for_inner_function),
-      )
-    }
+  let return_type: Type = match return_type {
+    ReturnType::Default => parse_quote!(()),
+    ReturnType::Type(_, t) => (**t).clone(),
   };
 
   let result = vec![
@@ -358,8 +317,6 @@ fn live_prop_test_function(
       #(#attrs) *
       #vis #defaultness #sig
       {
-        #inner_function_definition
-
         #(#history_declarations) *
 
         const __LIVE_PROP_TEST_DISPLAY_META: ::live_prop_test::TestFunctionDisplayMeta = ::live_prop_test::TestFunctionDisplayMeta {
@@ -386,7 +343,7 @@ fn live_prop_test_function(
           }
         );
 
-        let result = #inner_function_call_syntax::<#generic_parameter_values>(#parameter_values);
+        let result = (|| -> #return_type {#block})();
 
         #(#finish_statements) *
 
