@@ -15,8 +15,6 @@ use syn::{
   Type,
 };
 
-type AttrArguments = Punctuated<NestedMeta, Token![,]>;
-
 /// caveat about Self and generic parameters of the containing impl
 #[proc_macro_attribute]
 pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream {
@@ -29,6 +27,30 @@ pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream
   result
 }
 
+type AttrArguments = Punctuated<NestedMeta, Token![,]>;
+struct LivePropTestAttribute {
+  span: Span,
+  arguments: AttrArguments,
+}
+fn take_live_prop_test_attributes(
+  attributes: &mut Vec<Attribute>,
+  mut captured: Vec<LivePropTestAttribute>,
+) -> Result<Vec<LivePropTestAttribute>, TokenStream> {
+  for attribute in attributes.iter_mut() {
+    if attribute.path.is_ident("live_prop_test") {
+      let arguments: AttrArguments = attribute
+        .parse_args_with(Punctuated::parse_terminated)
+        .map_err(|e| e.to_compile_error())?;
+      captured.push(LivePropTestAttribute {
+        arguments,
+        span: attribute.span(),
+      });
+    }
+  }
+  attributes.retain(|attribute| !attribute.path.is_ident("live_prop_test"));
+  Ok(captured)
+}
+
 fn live_prop_test_impl(
   arguments: TokenStream,
   input: TokenStream,
@@ -36,21 +58,24 @@ fn live_prop_test_impl(
   let arguments: AttrArguments = Punctuated::parse_terminated
     .parse(arguments)
     .map_err(|e| e.to_compile_error())?;
+  let captured_attributes = vec![LivePropTestAttribute {
+    arguments,
+    span: Span::call_site(),
+  }];
 
   if let Ok(function) = syn::parse::<ImplItemMethod>(input.clone()) {
-    let replacement =
-      live_prop_test_function(&function, vec![(arguments, Span::call_site())], None)?;
+    let replacement = live_prop_test_function(&function, captured_attributes, None)?;
     Ok(quote! {#(#replacement) *}.into())
   } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input) {
-    live_prop_test_item_impl(arguments, item_impl)
+    live_prop_test_item_impl(item_impl, captured_attributes)
   } else {
     Err(quote! {compile_error! ("#[live_prop_test] can only be applied to a fn item, an impl item, or an argument in the signature of a fn that also has the attribute");}.into())
   }
 }
 
 fn live_prop_test_item_impl(
-  _arguments: AttrArguments,
   item_impl: ItemImpl,
+  _captured_attributes: Vec<LivePropTestAttribute>,
 ) -> Result<TokenStream, TokenStream> {
   // TODO require no arguments
   let ItemImpl {
@@ -98,7 +123,7 @@ fn live_prop_test_item_impl(
 
 fn live_prop_test_function(
   function: &ImplItemMethod,
-  captured_attribute_arguments: Vec<(AttrArguments, Span)>,
+  captured_attributes: Vec<LivePropTestAttribute>,
   containing_impl: Option<&ItemImpl>,
 ) -> Result<Vec<ImplItemMethod>, TokenStream> {
   let ImplItemMethod {
@@ -110,26 +135,16 @@ fn live_prop_test_function(
     ..
   } = function;
 
-  let mut arguments = captured_attribute_arguments;
-  for attr in attrs {
-    if attr.path.is_ident("live_prop_test") {
-      let attr_arguments: AttrArguments = attr
-        .parse_args_with(Punctuated::parse_terminated)
-        .map_err(|e| e.to_compile_error())?;
-      arguments.push((attr_arguments, attr.span()));
-    }
-  }
+  let mut attrs = attrs.clone();
+  let live_prop_test_attributes = take_live_prop_test_attributes(&mut attrs, captured_attributes)?;
 
   let mut test_attributes = Vec::new();
-  for (attr_arguments, attr_span) in arguments {
-    if attr_arguments.is_empty() {
-      return Err(quote_spanned! {attr_span=> compile_error! ("#[live_prop_test] attribute on fn item expects an argument");}.into());
+  for attribute in live_prop_test_attributes {
+    if attribute.arguments.is_empty() {
+      return Err(quote_spanned! {attribute.span=> compile_error! ("#[live_prop_test] attribute on fn item expects an argument");}.into());
     }
-    test_attributes.push(TestAttribute::from_attr_arguments(attr_arguments)?)
+    test_attributes.push(TestAttribute::from_attr_arguments(attribute.arguments)?)
   }
-
-  let mut attrs = attrs.clone();
-  attrs.retain(|attr| !attr.path.is_ident("live_prop_test"));
 
   let Signature {
     constness,
