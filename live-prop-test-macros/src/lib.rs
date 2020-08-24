@@ -2,7 +2,7 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{quote, quote_spanned};
+use quote::{quote, quote_spanned, ToTokens};
 use syn::{
   parse::Parser,
   parse_quote,
@@ -108,7 +108,97 @@ fn live_prop_test_item_impl(
   )
 }
 
+struct AnalyzedParameter {
+  //original: FnArg,
+  name: Expr,
+  is_mutable_reference: bool,
+  regression_prefix: &'static str,
+}
+fn analyzed_parameters<'a>(
+  originals: impl IntoIterator<Item = &'a FnArg>,
+) -> Result<Vec<AnalyzedParameter>, TokenStream> {
+  originals.into_iter().map (| original | {
+    match original {
+      FnArg::Receiver(receiver) => {
+        Ok(AnalyzedParameter {
+          //original: original.clone(),
+          name: parse_quote!(self),
+          is_mutable_reference: receiver.reference.is_some() && receiver.mutability.is_some(),
+          regression_prefix: "",
+        })
+      }
+      FnArg::Typed(pat_type) => {
+        let regression_prefix = match &*pat_type.ty {
+          Type::Reference(reference) => {
+            if reference.mutability.is_some() {
+              "&mut "
+            } else {
+              "&"
+            }
+          }
+          _ => "",
+        };
+        let is_mutable_reference = regression_prefix == "&mut ";
+        match &*pat_type.pat {
+          Pat::Ident(PatIdent { ident, .. }) => {
+            Ok(AnalyzedParameter {
+              //original: original.clone(),
+              name: parse_quote!(#ident),
+              is_mutable_reference,
+              regression_prefix,
+            })
+          }
+          pat => {
+            Err(
+              quote_spanned! {pat.span()=> compile_error! ("live-prop-test only supports function arguments that are bound as an identifier");}.into(),
+            )
+          }
+        }
+      }
+    }
+  }).collect()
+}
+
 /*
+fn remote_trait_method_stuff (attributes: & [LivePropTestAttribute], signature: & Signature)->(ImplItemMethod, Vec<Stmt>) {
+  let Signature {
+            ident: method_name,
+            inputs: parameters,
+            generics: Generics {
+              params: generic_parameters,
+              where_clause,
+              ..
+            }
+            ..
+          } = Signature;
+
+
+  let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+  let turbofish = type_generics.as_turbofish();
+
+  let invoke: Expr = if self_by_value {
+    vec![
+    parse_quote! (
+      let (new_self, #(#typed_argument_names,)*) = <Self as #trait_test_trait_path>::#method_name #turbofish (self, #(#typed_argument_names,)*);
+    ), parse_quote!(
+      self = new_self;
+    )]
+  }
+  else {
+    vec![parse_quote! (
+      let (#(#typed_argument_names,)*) = <Self as #trait_test_trait_path>::#method_name #turbofish (self, #(#typed_argument_names,)*);
+    )]
+  }
+
+  (
+    parse_quote! (
+
+    ),
+    invoke
+  )
+}
+
+
 fn live_prop_test_trait(item_trait: ItemTrait,
   _captured_attributes: Vec<LivePropTestAttribute>,
 ) -> Result<TokenStream, TokenStream> {
@@ -228,59 +318,15 @@ fn live_prop_test_function(
     return Err(quote_spanned! {asyncness.span=> compile_error! ("live-prop-test doesn't support testing async fn items");}.into());
   }
 
-  let mut parameters = parameters.clone();
-  let mut parameter_values: Punctuated<Expr, Token![,]> = Punctuated::new();
-  let mut parameter_value_representations: Vec<Expr> = Vec::new();
-  let mut parameter_regression_prefixes: Vec<Expr> = Vec::new();
-  let mut mutable_reference_argument_names: Vec<String> = Vec::new();
-
-  for parameter in parameters.iter_mut() {
-    let (parameter_value, attrs, prefix): (Expr, _, &str) = match parameter {
-      FnArg::Receiver(receiver) => {
-        if receiver.mutability.is_some() {
-          mutable_reference_argument_names.push("self".to_string());
-        }
-        (parse_quote! {self}, &mut receiver.attrs, "")
-      }
-      FnArg::Typed(pat_type) => {
-        let prefix = match &*pat_type.ty {
-          Type::Reference(reference) => {
-            if reference.mutability.is_some() {
-              "&mut "
-            } else {
-              "&"
-            }
-          }
-          _ => "",
-        };
-        match &*pat_type.pat {
-          Pat::Ident(PatIdent { ident, .. }) => {
-            if prefix == "&mut " {
-              mutable_reference_argument_names.push(ident.to_string());
-            }
-            (parse_quote! {#ident}, &mut pat_type.attrs, prefix)
-          }
-          pat => {
-            return Err(
-              quote_spanned! {pat.span()=> compile_error! ("live-prop-test only supports function arguments that are bound as an identifier");}.into(),
-            )
-          }
-        }
-      }
-    };
-    let config = gather_argument_config(attrs)?;
-
-    if config.no_debug {
-      parameter_value_representations.push(
-        parse_quote! { <::std::string::String as ::std::convert::From<&str>>::from("<Debug impl explicitly disabled>") },
-      )
-    } else {
-      parameter_value_representations
-        .push(parse_quote! { ::live_prop_test::MaybeDebug(&#parameter_value).__live_prop_test_represent() })
-    }
-    parameter_values.push(parameter_value);
-    parameter_regression_prefixes.push(parse_quote! {#prefix });
-  }
+  let num_parameters = parameters.len();
+  let analyzed = analyzed_parameters(parameters)?;
+  let parameter_names: Vec<_> = analyzed.iter().map(|a| &a.name).collect();
+  let parameter_regression_prefixes = analyzed.iter().map(|a| &a.regression_prefix);
+  let mutable_reference_argument_names: Vec<String> = analyzed
+    .iter()
+    .filter(|a| a.is_mutable_reference)
+    .map(|a| a.name.to_token_stream().to_string())
+    .collect();
 
   let test_bundles: Vec<TestBundle> = test_attributes
     .into_iter()
@@ -290,9 +336,6 @@ fn live_prop_test_function(
   let history_declarations = test_bundles.iter().map(|bundle| &bundle.history);
   let setup_statements = test_bundles.iter().map(|bundle| &bundle.setup);
   let finish_statements = test_bundles.iter().map(|bundle| &bundle.finish);
-
-  let parameter_values_vec: Vec<_> = parameter_values.iter().collect();
-  let num_parameters = parameter_values.len();
 
   let return_type: Type = match return_type {
     ReturnType::Default => parse_quote!(()),
@@ -320,7 +363,7 @@ fn live_prop_test_function(
           name: ::std::stringify! (#function_name),
           parameters: & [#(
             ::live_prop_test::TestArgumentDisplayMeta {
-              name: ::std::stringify!(#parameter_values_vec),
+              name: ::std::stringify!(#parameter_names),
               prefix: #parameter_regression_prefixes,
             }
           ),*],
@@ -334,7 +377,7 @@ fn live_prop_test_function(
           __LIVE_PROP_TEST_DISPLAY_META,
           || {
             use ::live_prop_test::NoDebugFallback;
-            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(#parameter_value_representations),*];
+            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_names).__live_prop_test_represent()),*];
             parameter_value_representations
           }
         );
@@ -350,48 +393,6 @@ fn live_prop_test_function(
     ),
   ];
   //eprintln!("{}", result);
-  Ok(result)
-}
-
-struct ArgumentConfig {
-  no_debug: bool,
-  pass_through: bool,
-}
-
-fn gather_argument_config(attrs: &mut Vec<Attribute>) -> Result<ArgumentConfig, TokenStream> {
-  let mut result = ArgumentConfig {
-    no_debug: false,
-    pass_through: false,
-  };
-
-  for attr in attrs.iter_mut() {
-    if attr.path.is_ident("live_prop_test") {
-      let arguments: Punctuated<Meta, Token![,]> = attr
-        .parse_args_with(Punctuated::parse_terminated)
-        .map_err(|e| e.to_compile_error())?;
-      for argument in arguments {
-        let mut valid = false;
-        if let Meta::Path(path) = &argument {
-          if path.is_ident("no_debug") {
-            result.no_debug = true;
-            valid = true;
-          }
-          if path.is_ident("pass_through") {
-            result.pass_through = true;
-            valid = true;
-          }
-        }
-        if !valid {
-          return Err(
-            quote_spanned! {argument.span()=> compile_error!("unrecognized argument to #[live_prop_test(...)] on function argument; valid arguments are `no_debug` and `pass_through`")}.into()
-          );
-        }
-      }
-    }
-  }
-
-  attrs.retain(|attr| !attr.path.is_ident("live_prop_test"));
-
   Ok(result)
 }
 
