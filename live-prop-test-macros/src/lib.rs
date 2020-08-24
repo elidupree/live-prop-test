@@ -150,7 +150,6 @@ fn live_prop_test_function(
     constness,
     unsafety,
     asyncness,
-    abi,
     inputs: parameters,
     output: return_type,
     generics: syn::Generics {
@@ -302,16 +301,14 @@ fn live_prop_test_function(
       #[cfg(not(debug_assertions))]
       // note: we can't just say #function because we do still need to purge any live_prop_test config attributes from the arguments
       #(#attrs) *
-      #vis #defaultness #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
-      #where_clause
+      #vis #defaultness #sig
       #block
 
     ),
     parse_quote!(
       #[cfg(debug_assertions)]
       #(#attrs) *
-      #vis #defaultness #unsafety #abi fn #function_name<#generic_parameters> (#parameters) #return_type
-      #where_clause
+      #vis #defaultness #sig
       {
         #inner_function_definition
 
