@@ -440,7 +440,7 @@ fn announce_failures<A>(
       writeln!(&mut assembled).unwrap();
     }
 
-    if !global_config().for_unit_tests {
+    if condition_type == "postcondition" && !global_config().for_unit_tests {
       #[allow(clippy::write_with_newline)]
       write!(
         &mut assembled,
