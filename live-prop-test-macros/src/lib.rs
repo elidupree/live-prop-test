@@ -343,7 +343,7 @@ fn live_prop_test_function(
           }
         );
 
-        let result = (|| -> #return_type {#block})();
+        let result = (|| -> #return_type #block)();
 
         #(#finish_statements) *
 
