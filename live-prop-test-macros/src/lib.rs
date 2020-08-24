@@ -2,7 +2,8 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{quote, quote_spanned};
+#[allow(unused_imports)]
 use syn::{
   parse::Parser,
   parse_quote,
@@ -10,8 +11,9 @@ use syn::{
   spanned::Spanned,
   visit::{self, Visit},
   visit_mut::{self, VisitMut},
-  Attribute, Expr, ExprCall, FnArg, Ident, ImplItem, ImplItemMethod, ItemImpl, ItemMacro, Lit,
-  Meta, MetaNameValue, NestedMeta, Pat, PatIdent, ReturnType, Signature, Stmt, Token, Type,
+  Attribute, Expr, ExprCall, FnArg, Generics, Ident, ImplItem, ImplItemMethod, ItemImpl, ItemMacro,
+  ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Path, ReturnType, Signature,
+  Stmt, Token, TraitItem, TraitItemMethod, Type,
 };
 
 /// caveat about Self and generic parameters of the containing impl
@@ -110,7 +112,8 @@ fn live_prop_test_item_impl(
 
 struct AnalyzedParameter {
   //original: FnArg,
-  name: Expr,
+  name_expr: Expr,
+  name_string: String,
   is_mutable_reference: bool,
   regression_prefix: &'static str,
 }
@@ -122,7 +125,8 @@ fn analyzed_parameters<'a>(
       FnArg::Receiver(receiver) => {
         Ok(AnalyzedParameter {
           //original: original.clone(),
-          name: parse_quote!(self),
+          name_expr: parse_quote!(self),
+          name_string: "self".to_string(),
           is_mutable_reference: receiver.reference.is_some() && receiver.mutability.is_some(),
           regression_prefix: "",
         })
@@ -143,7 +147,8 @@ fn analyzed_parameters<'a>(
           Pat::Ident(PatIdent { ident, .. }) => {
             Ok(AnalyzedParameter {
               //original: original.clone(),
-              name: parse_quote!(#ident),
+              name_expr: parse_quote!(#ident),
+              name_string: ident.to_string(),
               is_mutable_reference,
               regression_prefix,
             })
@@ -200,7 +205,7 @@ fn remote_trait_method_stuff (attributes: & [LivePropTestAttribute], signature: 
 
 
 fn live_prop_test_trait(item_trait: ItemTrait,
-  _captured_attributes: Vec<LivePropTestAttribute>,
+  captured_attributes: Vec<LivePropTestAttribute>,
 ) -> Result<TokenStream, TokenStream> {
   let _live_prop_test_attributes = take_live_prop_test_attributes(&mut item_trait.attrs, captured_attributes)?;
 
@@ -211,8 +216,6 @@ fn live_prop_test_trait(item_trait: ItemTrait,
     ..
   } = &item_trait;
 
-  let mut attrs = attrs.clone();
-
 
   let mut new_items = Vec::with_capacity(item_trait.items.len());
   let mut test_struct_methods = Vec::with_capacity(item_trait.items.len());
@@ -221,20 +224,50 @@ fn live_prop_test_trait(item_trait: ItemTrait,
       TraitItem::Method(method) => {
         let TraitItemMethod {
           sig: Signature {
+            inputs: parameters,
             ident: method_name,
             generics: Generics {
               params: generic_parameters,
               where_clause,
               ..
-            }
+            },
             ..
           },
           ..
         } = &method;
-        test_struct_methods.push (parse_quote! (
-          (#method_name, #()
-          pub fn #method_name #generic_parameters (#inputs) #where_clause {
+        let analyzed = analyzed_parameters(parameters)?;
+        let parameter_name_strings: Vec<&str> = analyzed.iter().map(|a| &*a.name_string).collect();
+        let parameter_name_exprs: Vec<&Expr> = analyzed.iter().filter(|a| a.name_string != "self").map(|a| &a.name_expr).collect();
 
+        struct ReplaceParameterNames<'a> {
+          parameter_name_strings: &'a[&'a str],
+        }
+
+        impl<'a> VisitMut for ReplaceParameterNames<'a> {
+          fn visit_path_mut(&mut self, path: &mut Path) {
+            if self.parameter_name_strings.iter().any(|name| path.is_ident(name)) {
+              *path = parse_quote!($#path);
+            }
+          }
+        }
+
+        ReplaceParameterNames {
+          parameter_name_strings: &parameter_name_strings
+        }.visit_stmt_mut(&mut setup_statement);
+
+
+        test_macro_items.push (parse_quote! (
+          macro_rules! #trait_method_test_macro_name {
+            (#($#parameter_name_exprs: tt)*) => {
+              #setup_statement
+            }
+          }
+        ));
+        test_macro_items.push (parse_quote! (
+          macro_rules! #trait_method_test_macro_name {
+            (#($#parameter_name_exprs: tt)*) => {
+              #finish_statement
+            }
           }
         ));
         if method
@@ -242,9 +275,9 @@ fn live_prop_test_trait(item_trait: ItemTrait,
           .iter()
           .any(|attr| attr.path.is_ident("live_prop_test"))
         {
-          let replacement = live_prop_test_function(method, Vec::new(), Some(&item_impl))?;
+          let replacement = live_prop_test_function(method, Vec::new())?;
           for method in replacement {
-            new_items.push(ImplItem::Method(method));
+            new_items.push(TraitItem::Method(method));
           }
         }
       }
@@ -272,7 +305,7 @@ fn live_prop_test_trait(item_trait: ItemTrait,
 }
 
 
-}
+
 
 struct TestedFunctionShared {
 
@@ -320,12 +353,12 @@ fn live_prop_test_function(
 
   let num_parameters = parameters.len();
   let analyzed = analyzed_parameters(parameters)?;
-  let parameter_names: Vec<_> = analyzed.iter().map(|a| &a.name).collect();
+  let parameter_name_exprs: Vec<_> = analyzed.iter().map(|a| &a.name_expr).collect();
   let parameter_regression_prefixes = analyzed.iter().map(|a| &a.regression_prefix);
-  let mutable_reference_argument_names: Vec<String> = analyzed
+  let mutable_reference_argument_names: Vec<&str> = analyzed
     .iter()
     .filter(|a| a.is_mutable_reference)
-    .map(|a| a.name.to_token_stream().to_string())
+    .map(|a| &*a.name_string)
     .collect();
 
   let test_bundles: Vec<TestBundle> = test_attributes
@@ -363,7 +396,7 @@ fn live_prop_test_function(
           name: ::std::stringify! (#function_name),
           parameters: & [#(
             ::live_prop_test::TestArgumentDisplayMeta {
-              name: ::std::stringify!(#parameter_names),
+              name: ::std::stringify!(#parameter_name_exprs),
               prefix: #parameter_regression_prefixes,
             }
           ),*],
@@ -377,7 +410,7 @@ fn live_prop_test_function(
           __LIVE_PROP_TEST_DISPLAY_META,
           || {
             use ::live_prop_test::NoDebugFallback;
-            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_names).__live_prop_test_represent()),*];
+            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_name_exprs).__live_prop_test_represent()),*];
             parameter_value_representations
           }
         );
@@ -442,7 +475,7 @@ impl TestAttribute {
   fn bundle(
     self,
     unique_id: usize,
-    mutable_reference_argument_names: &[String],
+    mutable_reference_argument_names: &[&str],
   ) -> Result<TestBundle, TokenStream> {
     let history_identifier = Ident::new(
       &format!("__LIVE_PROP_TEST_HISTORY_{}", unique_id),
@@ -475,7 +508,7 @@ impl TestAttribute {
       old_identifiers: Vec<Ident>,
       next_index: usize,
       result: Result<(), TokenStream>,
-      mutable_reference_argument_names: &'a [String],
+      mutable_reference_argument_names: &'a [&'a str],
     }
 
     struct ForbidRecursiveOldExpressions<'a> {
