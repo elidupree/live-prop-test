@@ -10,9 +10,8 @@ use syn::{
   spanned::Spanned,
   visit::{self, Visit},
   visit_mut::{self, VisitMut},
-  Attribute, Expr, ExprCall, FnArg, GenericArgument, GenericParam, Ident, ImplItem, ImplItemMethod,
-  ItemImpl, ItemMacro, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, ReturnType, Signature,
-  Stmt, Token, Type,
+  Attribute, Expr, ExprCall, FnArg, Ident, ImplItem, ImplItemMethod, ItemImpl, ItemMacro, Lit,
+  Meta, MetaNameValue, NestedMeta, Pat, PatIdent, ReturnType, Signature, Stmt, Token, Type,
 };
 
 /// caveat about Self and generic parameters of the containing impl
@@ -117,23 +116,37 @@ fn live_prop_test_trait(item_trait: ItemTrait,
 
   // TODO require no arguments
   let ItemTrait {
-    attrs,
-    defaultness,
-    unsafety,
+    ident: trait_name,
     generics,
-    trait_,
-    self_ty,
-    items,
     ..
-  } = &item_impl;
+  } = &item_trait;
 
   let mut attrs = attrs.clone();
 
 
-  let mut new_items = Vec::new();
-  for item in items {
+  let mut new_items = Vec::with_capacity(item_trait.items.len());
+  let mut test_struct_methods = Vec::with_capacity(item_trait.items.len());
+  for item in std::mem::take(&mut item_trait.items) {
     match item {
-      ImplItem::Method(method) => {
+      TraitItem::Method(method) => {
+        let TraitItemMethod {
+          sig: Signature {
+            ident: method_name,
+            generics: Generics {
+              params: generic_parameters,
+              where_clause,
+              ..
+            }
+            ..
+          },
+          ..
+        } = &method;
+        test_struct_methods.push (parse_quote! (
+          (#method_name, #()
+          pub fn #method_name #generic_parameters (#inputs) #where_clause {
+
+          }
+        ));
         if method
           .attrs
           .iter()
@@ -149,13 +162,19 @@ fn live_prop_test_trait(item_trait: ItemTrait,
     }
   }
 
-  let trait_ = trait_.as_ref().map(|(a, b, c)| quote!(#a #b #c));
+  let trait_tests_struct_name = Ident::new(
+      &format!("__LivePropTestTraitTestsFor{}", trait_name),
+      Span::call_site(),
+    );
+
+  let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
 
   Ok(
     quote! {
-      #(#attrs) *
-      #defaultness #unsafety impl #generics #trait_ #self_ty {
-        #(#new_items) *
+      #[doc(hidden)]
+      pub struct #trait_test_struct_name #generics;
+      impl #impl_generics #trait_test_struct_name #type_generics #where_clause {
+        #(#test_struct_methods) *
       }
     }
     .into(),
@@ -198,10 +217,6 @@ fn live_prop_test_function(
     asyncness,
     inputs: parameters,
     output: return_type,
-    generics: syn::Generics {
-      params: generic_parameters,
-      ..
-    },
     ident: function_name,
     ..
   } = sig;
@@ -275,25 +290,6 @@ fn live_prop_test_function(
   let history_declarations = test_bundles.iter().map(|bundle| &bundle.history);
   let setup_statements = test_bundles.iter().map(|bundle| &bundle.setup);
   let finish_statements = test_bundles.iter().map(|bundle| &bundle.finish);
-
-  let mut generic_parameter_values: Punctuated<GenericArgument, Token! [,]> = Punctuated::new();
-
-  for parameter in generic_parameters {
-    match parameter {
-      GenericParam::Type(type_parameter) => {
-        let value = &type_parameter.ident;
-        generic_parameter_values.push(parse_quote! {#value});
-      }
-      GenericParam::Const(const_parameter) => {
-        let value = &const_parameter.ident;
-        generic_parameter_values.push(parse_quote! {#value});
-      }
-      GenericParam::Lifetime(lifetime_parameter) => {
-        let value = &lifetime_parameter.lifetime;
-        generic_parameter_values.push(parse_quote! {#value});
-      }
-    }
-  }
 
   let parameter_values_vec: Vec<_> = parameter_values.iter().collect();
   let num_parameters = parameter_values.len();
