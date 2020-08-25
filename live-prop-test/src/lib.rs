@@ -145,7 +145,7 @@ impl LivePropTestConfig {
       && !(for_unit_tests && result.config.for_unit_tests)
       && !(for_internal_tests && result.config.for_internal_tests)
     {
-      panic!("Attempted to initalize live-prop-test when it was already initialized. (Note: If this is in a #[test], be aware that multiple tests may run during the same program execution. Consider using `live_prop_test::initialize_for_unit_tests()`, which is idempotent.)");
+      panic!("Attempted to initialize live-prop-test when it was already initialized. (Note: If this is in a #[test], be aware that multiple tests may run during the same program execution. Consider using `live_prop_test::initialize_for_unit_tests()`, which is idempotent.)");
     }
   }
 }
