@@ -3,6 +3,7 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{quote, quote_spanned};
+use syn::ItemConst;
 #[allow(unused_imports)]
 use syn::{
   parse::Parser,
@@ -201,74 +202,73 @@ fn remote_trait_method_stuff (attributes: & [LivePropTestAttribute], signature: 
     ),
     invoke
   )
-}
+} */
 
-
-fn live_prop_test_trait(item_trait: ItemTrait,
+/*fn live_prop_test_trait(
+  mut item_trait: ItemTrait,
   captured_attributes: Vec<LivePropTestAttribute>,
 ) -> Result<TokenStream, TokenStream> {
-  let _live_prop_test_attributes = take_live_prop_test_attributes(&mut item_trait.attrs, captured_attributes)?;
+  let _live_prop_test_attributes =
+    take_live_prop_test_attributes(&mut item_trait.attrs, captured_attributes)?;
 
   // TODO require no arguments
-  let ItemTrait {
-    ident: trait_name,
-    generics,
-    ..
-  } = &item_trait;
-
 
   let mut new_items = Vec::with_capacity(item_trait.items.len());
-  let mut test_struct_methods = Vec::with_capacity(item_trait.items.len());
+  let mut test_macro_arms = Vec::with_capacity(item_trait.items.len());
   for item in std::mem::take(&mut item_trait.items) {
     match item {
       TraitItem::Method(method) => {
         let TraitItemMethod {
-          sig: Signature {
-            inputs: parameters,
-            ident: method_name,
-            generics: Generics {
-              params: generic_parameters,
-              where_clause,
+          sig:
+            Signature {
+              inputs: parameters,
+              ident: method_name,
+              generics:
+                Generics {
+                  params: generic_parameters,
+                  where_clause,
+                  ..
+                },
               ..
             },
-            ..
-          },
           ..
         } = &method;
         let analyzed = analyzed_parameters(parameters)?;
         let parameter_name_strings: Vec<&str> = analyzed.iter().map(|a| &*a.name_string).collect();
-        let parameter_name_exprs: Vec<&Expr> = analyzed.iter().filter(|a| a.name_string != "self").map(|a| &a.name_expr).collect();
+        let parameter_name_exprs: Vec<&Expr> = analyzed
+          .iter()
+          .filter(|a| a.name_string != "self")
+          .map(|a| &a.name_expr)
+          .collect();
 
         struct ReplaceParameterNames<'a> {
-          parameter_name_strings: &'a[&'a str],
+          parameter_name_strings: &'a [&'a str],
         }
 
         impl<'a> VisitMut for ReplaceParameterNames<'a> {
           fn visit_path_mut(&mut self, path: &mut Path) {
-            if self.parameter_name_strings.iter().any(|name| path.is_ident(name)) {
+            if self
+              .parameter_name_strings
+              .iter()
+              .any(|name| path.is_ident(name))
+            {
               *path = parse_quote!($#path);
             }
           }
         }
 
         ReplaceParameterNames {
-          parameter_name_strings: &parameter_name_strings
-        }.visit_stmt_mut(&mut setup_statement);
+          parameter_name_strings: &parameter_name_strings,
+        }
+        .visit_stmt_mut(&mut setup_statement);
 
-
-        test_macro_items.push (parse_quote! (
-          macro_rules! #trait_method_test_macro_name {
-            (#($#parameter_name_exprs: tt)*) => {
+        test_macro_arms.push(quote! (
+            (#method_name setup #($#parameter_name_exprs: tt)*) => {
               #setup_statement
             }
-          }
-        ));
-        test_macro_items.push (parse_quote! (
-          macro_rules! #trait_method_test_macro_name {
-            (#($#parameter_name_exprs: tt)*) => {
+            (#method_name finish #($#parameter_name_exprs: tt)*) => {
               #finish_statement
             }
-          }
         ));
         if method
           .attrs
@@ -285,31 +285,103 @@ fn live_prop_test_trait(item_trait: ItemTrait,
     }
   }
 
-  let trait_tests_struct_name = Ident::new(
-      &format!("__LivePropTestTraitTestsFor{}", trait_name),
-      Span::call_site(),
-    );
+  let trait_tests_macro_name = Ident::new(
+    &format!("__live_prop_test_trait_tests_for_{}", item_trait.ident),
+    Span::call_site(),
+  );
 
-  let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+  item_trait.items = new_items;
 
   Ok(
     quote! {
       #[doc(hidden)]
-      pub struct #trait_test_struct_name #generics;
-      impl #impl_generics #trait_test_struct_name #type_generics #where_clause {
-        #(#test_struct_methods) *
+      macro_rules! #trait_tests_macro_name {
+        #(#test_macro_arms) *
       }
+      #item_trait
     }
     .into(),
   )
-}
+}*/
 
-
-
+/*
 
 struct TestedFunctionShared {
 
 }*/
+
+struct AnalyzedSignature {
+  display_meta_item: ItemConst,
+  start_setup: Stmt,
+  finish_setup: Stmt,
+  finish: Stmt,
+  return_type: Type,
+  mutable_reference_argument_names: Vec<String>,
+}
+impl AnalyzedSignature {
+  fn new(signature: &Signature) -> Result<Self, TokenStream> {
+    let Signature {
+      constness,
+      asyncness,
+      inputs: parameters,
+      output: return_type,
+      ident: function_name,
+      ..
+    } = signature;
+
+    if let Some(constness) = constness {
+      return Err(quote_spanned! {constness.span=> compile_error! ("live-prop-test doesn't support testing const fn items");}.into());
+    }
+    if let Some(asyncness) = asyncness {
+      return Err(quote_spanned! {asyncness.span=> compile_error! ("live-prop-test doesn't support testing async fn items");}.into());
+    }
+
+    let num_parameters = parameters.len();
+    let analyzed = analyzed_parameters(parameters)?;
+    let parameter_name_exprs: Vec<_> = analyzed.iter().map(|a| &a.name_expr).collect();
+    let parameter_regression_prefixes = analyzed.iter().map(|a| &a.regression_prefix);
+    let mutable_reference_argument_names = analyzed
+      .iter()
+      .filter(|a| a.is_mutable_reference)
+      .map(|a| a.name_string.clone())
+      .collect();
+
+    let return_type: Type = match return_type {
+      ReturnType::Default => parse_quote!(()),
+      ReturnType::Type(_, t) => (**t).clone(),
+    };
+
+    Ok(AnalyzedSignature {
+      display_meta_item: parse_quote!(
+              const __LIVE_PROP_TEST_DISPLAY_META: ::live_prop_test::TestFunctionDisplayMeta = ::live_prop_test::TestFunctionDisplayMeta {
+                module_path: ::std::module_path!(),
+                name: ::std::stringify! (#function_name),
+                parameters: & [#(
+                  ::live_prop_test::TestArgumentDisplayMeta {
+                    name: ::std::stringify!(#parameter_name_exprs),
+                    prefix: #parameter_regression_prefixes,
+                  }
+                ),*],
+              };
+      ),
+      start_setup: parse_quote!(let mut __live_prop_test_setup = ::live_prop_test::TestsSetup::new();),
+      finish_setup: parse_quote!(
+      let mut __live_prop_test_finisher = __live_prop_test_setup.finish_setup (
+        __LIVE_PROP_TEST_DISPLAY_META,
+        || {
+          use ::live_prop_test::NoDebugFallback;
+          let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_name_exprs).__live_prop_test_represent()),*];
+          parameter_value_representations
+        }
+      );
+      ),
+      return_type,
+      finish: parse_quote!(
+        __live_prop_test_finisher.finish(__LIVE_PROP_TEST_DISPLAY_META);),
+      mutable_reference_argument_names,
+    })
+  }
+}
 
 fn live_prop_test_function(
   function: &ImplItemMethod,
@@ -335,31 +407,14 @@ fn live_prop_test_function(
     test_attributes.push(TestAttribute::from_attr_arguments(attribute.arguments)?)
   }
 
-  let Signature {
-    constness,
-    asyncness,
-    inputs: parameters,
-    output: return_type,
-    ident: function_name,
-    ..
-  } = sig;
-
-  if let Some(constness) = constness {
-    return Err(quote_spanned! {constness.span=> compile_error! ("live-prop-test doesn't support testing const fn items");}.into());
-  }
-  if let Some(asyncness) = asyncness {
-    return Err(quote_spanned! {asyncness.span=> compile_error! ("live-prop-test doesn't support testing async fn items");}.into());
-  }
-
-  let num_parameters = parameters.len();
-  let analyzed = analyzed_parameters(parameters)?;
-  let parameter_name_exprs: Vec<_> = analyzed.iter().map(|a| &a.name_expr).collect();
-  let parameter_regression_prefixes = analyzed.iter().map(|a| &a.regression_prefix);
-  let mutable_reference_argument_names: Vec<&str> = analyzed
-    .iter()
-    .filter(|a| a.is_mutable_reference)
-    .map(|a| &*a.name_string)
-    .collect();
+  let AnalyzedSignature {
+    display_meta_item,
+    start_setup,
+    finish_setup,
+    finish,
+    return_type,
+    mutable_reference_argument_names,
+  } = AnalyzedSignature::new(sig)?;
 
   let history_identifiers: Vec<_> = test_attributes
     .iter()
@@ -371,7 +426,7 @@ fn live_prop_test_function(
       )
     })
     .collect();
-  let  history_declarations : Vec<ItemMacro> = history_identifiers .iter ().  map (|  history_identifier |
+  let history_declarations : Vec<ItemMacro> = history_identifiers .iter ().  map (|  history_identifier |
     parse_quote!(::std::thread_local! {
       static #history_identifier: ::live_prop_test::TestHistory = ::live_prop_test::TestHistory::new();
     })
@@ -391,11 +446,6 @@ fn live_prop_test_function(
   let setup_statements = finalized.iter().map(|finalized| &finalized.0);
   let finish_statements = finalized.iter().map(|finalized| &finalized.1);
 
-  let return_type: Type = match return_type {
-    ReturnType::Default => parse_quote!(()),
-    ReturnType::Type(_, t) => (**t).clone(),
-  };
-
   let result = vec![
     parse_quote!(
       #[cfg(not(debug_assertions))]
@@ -411,36 +461,16 @@ fn live_prop_test_function(
       #vis #defaultness #sig
       {
         #(#history_declarations) *
+        #display_meta_item
 
-        const __LIVE_PROP_TEST_DISPLAY_META: ::live_prop_test::TestFunctionDisplayMeta = ::live_prop_test::TestFunctionDisplayMeta {
-          module_path: ::std::module_path!(),
-          name: ::std::stringify! (#function_name),
-          parameters: & [#(
-            ::live_prop_test::TestArgumentDisplayMeta {
-              name: ::std::stringify!(#parameter_name_exprs),
-              prefix: #parameter_regression_prefixes,
-            }
-          ),*],
-        };
-
-        let mut __live_prop_test_setup = ::live_prop_test::TestsSetup::new();
-
+        #start_setup
         #(#setup_statements) *
-
-        let mut __live_prop_test_finisher = __live_prop_test_setup.finish_setup (
-          __LIVE_PROP_TEST_DISPLAY_META,
-          || {
-            use ::live_prop_test::NoDebugFallback;
-            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_name_exprs).__live_prop_test_represent()),*];
-            parameter_value_representations
-          }
-        );
+        #finish_setup
 
         let result = (|| -> #return_type #block)();
 
         #(#finish_statements) *
-
-        __live_prop_test_finisher.finish(__LIVE_PROP_TEST_DISPLAY_META);
+        #finish
 
         result
       }
@@ -493,7 +523,7 @@ impl TestAttribute {
     Ok(result)
   }
 
-  fn bundle(self, mutable_reference_argument_names: &[&str]) -> Result<TestBundle, TokenStream> {
+  fn bundle(self, mutable_reference_argument_names: &[String]) -> Result<TestBundle, TokenStream> {
     fn evaluate_and_record_failures(condition: Expr) -> Expr {
       parse_quote! (
         if let ::std::result::Result::Err(__live_prop_test_failure_message) = ::live_prop_test::LivePropTestResult::canonicalize(#condition) {
@@ -516,7 +546,7 @@ impl TestAttribute {
       old_identifiers: Vec<Ident>,
       next_index: usize,
       result: Result<(), TokenStream>,
-      mutable_reference_argument_names: &'a [&'a str],
+      mutable_reference_argument_names: &'a [String],
     }
 
     struct ForbidRecursiveOldExpressions<'a> {
