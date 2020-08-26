@@ -361,14 +361,35 @@ fn live_prop_test_function(
     .map(|a| &*a.name_string)
     .collect();
 
+  let history_identifiers: Vec<_> = test_attributes
+    .iter()
+    .enumerate()
+    .map(|(index, _)| {
+      Ident::new(
+        &format!("__LIVE_PROP_TEST_HISTORY_{}", index),
+        Span::call_site(),
+      )
+    })
+    .collect();
+  let  history_declarations : Vec<ItemMacro> = history_identifiers .iter ().  map (|  history_identifier |
+    parse_quote!(::std::thread_local! {
+      static #history_identifier: ::live_prop_test::TestHistory = ::live_prop_test::TestHistory::new();
+    })
+  ) .collect ();
   let test_bundles: Vec<TestBundle> = test_attributes
     .into_iter()
-    .enumerate()
-    .map(|(index, attribute)| attribute.bundle(index, &mutable_reference_argument_names))
+    .map(|attribute| attribute.bundle(&mutable_reference_argument_names))
     .collect::<Result<_, _>>()?;
-  let history_declarations = test_bundles.iter().map(|bundle| &bundle.history);
-  let setup_statements = test_bundles.iter().map(|bundle| &bundle.setup);
-  let finish_statements = test_bundles.iter().map(|bundle| &bundle.finish);
+  let finalized: Vec<_> = test_bundles
+    .into_iter()
+    .zip(history_identifiers)
+    .enumerate()
+    .map(|(index, (bundle, history_identifier))| {
+      bundle.finalize(index, parse_quote!(#history_identifier))
+    })
+    .collect();
+  let setup_statements = finalized.iter().map(|finalized| &finalized.0);
+  let finish_statements = finalized.iter().map(|finalized| &finalized.1);
 
   let return_type: Type = match return_type {
     ReturnType::Default => parse_quote!(()),
@@ -472,20 +493,7 @@ impl TestAttribute {
     Ok(result)
   }
 
-  fn bundle(
-    self,
-    unique_id: usize,
-    mutable_reference_argument_names: &[&str],
-  ) -> Result<TestBundle, TokenStream> {
-    let history_identifier = Ident::new(
-      &format!("__LIVE_PROP_TEST_HISTORY_{}", unique_id),
-      Span::call_site(),
-    );
-    let test_temporaries_identifier = Ident::new(
-      &format!("__LIVE_PROP_TEST_TEMPORARIES_IDENTIFIER_{}", unique_id),
-      Span::call_site(),
-    );
-
+  fn bundle(self, mutable_reference_argument_names: &[&str]) -> Result<TestBundle, TokenStream> {
     fn evaluate_and_record_failures(condition: Expr) -> Expr {
       parse_quote! (
         if let ::std::result::Result::Err(__live_prop_test_failure_message) = ::live_prop_test::LivePropTestResult::canonicalize(#condition) {
@@ -604,44 +612,60 @@ impl TestAttribute {
     let old_expressions = collector.old_expressions;
     let old_identifiers = collector.old_identifiers;
 
-    let history = parse_quote!(::std::thread_local! {
-      static #history_identifier: ::live_prop_test::TestHistory = ::live_prop_test::TestHistory::new();
-    });
-
-    let setup = parse_quote! (
-      let #test_temporaries_identifier = #history_identifier.with(|__live_prop_test_history| {
-        __live_prop_test_setup.setup_test(
-          __live_prop_test_history,
-          | __live_prop_test_failures | {
-            #(#preconditions) *
-            (#(#old_expressions,)*)
-          }
-        )
-      });
+    let setup_closure = parse_quote! (
+      | __live_prop_test_failures | {
+        #(#preconditions) *
+        (#(#old_expressions,)*)
+      }
     );
 
-    let finish = parse_quote! (
-      #history_identifier.with(|__live_prop_test_history| {
-        __live_prop_test_finisher.finish_test(
-          __live_prop_test_history,
-          #test_temporaries_identifier,
-          | (#(#old_identifiers,)*), __live_prop_test_failures | {
-            #(#postconditions) *
-          }
-        )
-      });
+    let finish_closure = parse_quote! (
+      | (#(#old_identifiers,)*), __live_prop_test_failures | {
+        #(#postconditions) *
+      }
     );
 
     Ok(TestBundle {
-      history,
-      setup,
-      finish,
+      setup_closure,
+      finish_closure,
     })
   }
 }
 
 struct TestBundle {
-  history: ItemMacro,
-  setup: Stmt,
-  finish: Stmt,
+  setup_closure: Expr,
+  finish_closure: Expr,
+}
+
+impl TestBundle {
+  fn finalize(&self, unique_id: usize, history: Expr) -> (Stmt, Stmt) {
+    let test_temporaries_identifier = Ident::new(
+      &format!("__LIVE_PROP_TEST_TEMPORARIES_IDENTIFIER_{}", unique_id),
+      Span::call_site(),
+    );
+
+    let setup_closure = &self.setup_closure;
+    let finish_closure = &self.finish_closure;
+
+    let setup = parse_quote! (
+      let #test_temporaries_identifier = #history.with(|__live_prop_test_history| {
+        __live_prop_test_setup.setup_test(
+          __live_prop_test_history,
+          #setup_closure,
+        )
+      });
+    );
+
+    let finish = parse_quote! (
+      #history.with(|__live_prop_test_history| {
+        __live_prop_test_finisher.finish_test(
+          __live_prop_test_history,
+          #test_temporaries_identifier,
+          #finish_closure,
+        )
+      });
+    );
+
+    (setup, finish)
+  }
 }
