@@ -156,6 +156,13 @@ impl TestedTrait for ImplementorWithoutAttribute {
   fn self_method_without_default(&self, _b: i32) {}
   fn untested_method() {}
 }
+struct ImplementorWithAttribute;
+#[live_prop_test]
+impl TestedTrait for ImplementorWithAttribute {
+  fn method_without_default() {}
+  fn self_method_without_default(&self, _b: i32) {}
+  fn untested_method() {}
+}
 
 #[test]
 fn implementor_without_attribute_passes_non_default() {
@@ -177,4 +184,32 @@ fn implementor_without_attribute_fails_default() {
 fn implementor_without_attribute_fails_default_self() {
   ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithoutAttribute.self_method_with_default(5);
+}
+
+#[test]
+#[should_panic(expected = "postcondition")]
+fn implementor_with_attribute_fails_non_default() {
+  ::live_prop_test::initialize_for_internal_tests();
+  ImplementorWithAttribute::method_without_default();
+}
+
+#[test]
+#[should_panic(expected = "postcondition")]
+fn implementor_with_attribute_fails_non_default_self() {
+  ::live_prop_test::initialize_for_internal_tests();
+  ImplementorWithAttribute.self_method_without_default(5);
+}
+
+#[test]
+#[should_panic(expected = "postcondition")]
+fn implementor_with_attribute_fails_default() {
+  ::live_prop_test::initialize_for_internal_tests();
+  ImplementorWithAttribute::method_with_default();
+}
+
+#[test]
+#[should_panic(expected = "postcondition")]
+fn implementor_with_attribute_fails_default_self() {
+  ::live_prop_test::initialize_for_internal_tests();
+  ImplementorWithAttribute.self_method_with_default(5);
 }

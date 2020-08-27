@@ -78,42 +78,6 @@ fn live_prop_test_impl(
   }
 }
 
-fn live_prop_test_item_impl(
-  mut item_impl: ItemImpl,
-  captured_attributes: Vec<LivePropTestAttribute>,
-) -> Result<TokenStream, TokenStream> {
-  let _live_prop_test_attributes =
-    take_live_prop_test_attributes(&mut item_impl.attrs, captured_attributes)?;
-
-  let mut new_items = Vec::with_capacity(item_impl.items.len());
-  for item in std::mem::take(&mut item_impl.items) {
-    match item {
-      ImplItem::Method(method) => {
-        if method
-          .attrs
-          .iter()
-          .any(|attr| attr.path.is_ident("live_prop_test"))
-        {
-          let replacement = live_prop_test_function(&method, Vec::new())?;
-          for method in replacement {
-            new_items.push(ImplItem::Method(method));
-          }
-        }
-      }
-      _ => new_items.push(item),
-    }
-  }
-
-  item_impl.items = new_items;
-
-  Ok(
-    quote! {
-      #item_impl
-    }
-    .into(),
-  )
-}
-
 struct AnalyzedParameter {
   //original: FnArg,
   name_expr: Expr,
@@ -451,6 +415,44 @@ fn live_prop_test_item_trait(
         #(#test_macro_arms) *
       }
       #item_trait
+    }
+    .into(),
+  )
+}
+
+fn live_prop_test_item_impl(
+  mut item_impl: ItemImpl,
+  captured_attributes: Vec<LivePropTestAttribute>,
+) -> Result<TokenStream, TokenStream> {
+  let _live_prop_test_attributes =
+    take_live_prop_test_attributes(&mut item_impl.attrs, captured_attributes)?;
+
+  let mut new_items = Vec::with_capacity(item_impl.items.len());
+  for item in std::mem::take(&mut item_impl.items) {
+    match item {
+      ImplItem::Method(method) => {
+        if method
+          .attrs
+          .iter()
+          .any(|attr| attr.path.is_ident("live_prop_test"))
+        {
+          let replacement = live_prop_test_function(&method, Vec::new())?;
+          for method in replacement {
+            new_items.push(ImplItem::Method(method));
+          }
+        } else {
+          new_items.push(ImplItem::Method(method));
+        }
+      }
+      _ => new_items.push(item),
+    }
+  }
+
+  item_impl.items = new_items;
+
+  Ok(
+    quote! {
+      #item_impl
     }
     .into(),
   )
