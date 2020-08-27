@@ -16,7 +16,7 @@ use syn::{
   ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Path, ReturnType, Signature,
   Stmt, Token, TraitItem, TraitItemMethod, Type,
 };
-use syn::{Block, ItemConst};
+use syn::{Block, ItemConst, PathArguments};
 
 /// caveat about Self and generic parameters of the containing impl
 #[proc_macro_attribute]
@@ -67,7 +67,7 @@ fn live_prop_test_impl(
   }];
 
   if let Ok(function) = syn::parse::<ImplItemMethod>(input.clone()) {
-    let replacement = live_prop_test_function(&function, captured_attributes)?;
+    let replacement = live_prop_test_function(&function, captured_attributes, None)?;
     Ok(quote! {#(#replacement) *}.into())
   } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input.clone()) {
     live_prop_test_item_impl(item_impl, captured_attributes)
@@ -267,44 +267,6 @@ impl AnalyzedFunctionAttributes {
     })
   }
 }
-/*
-fn remote_trait_method_stuff (attributes: & [LivePropTestAttribute], signature: & Signature)->(ImplItemMethod, Vec<Stmt>) {
-  let Signature {
-            ident: method_name,
-            inputs: parameters,
-            generics: Generics {
-              params: generic_parameters,
-              where_clause,
-              ..
-            }
-            ..
-          } = Signature;
-
-
-  let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
-  let turbofish = type_generics.as_turbofish();
-
-  let invoke: Expr = if self_by_value {
-    vec![
-    parse_quote! (
-      let (new_self, #(#typed_argument_names,)*) = <Self as #trait_test_trait_path>::#method_name #turbofish (self, #(#typed_argument_names,)*);
-    ), parse_quote!(
-      self = new_self;
-    )]
-  }
-  else {
-    vec![parse_quote! (
-      let (#(#typed_argument_names,)*) = <Self as #trait_test_trait_path>::#method_name #turbofish (self, #(#typed_argument_names,)*);
-    )]
-  }
-
-  (
-    parse_quote! (
-
-    ),
-    invoke
-  )
-} */
 
 fn live_prop_test_item_trait(
   mut item_trait: ItemTrait,
@@ -366,20 +328,17 @@ fn live_prop_test_item_trait(
         {
           ReplaceParameterNames { parameter_names }.visit_stmt_mut(statement);
         }
-        for (setup, finish) in analyzed_attributes
-          .setup_statements
-          .iter()
-          .zip(&analyzed_attributes.finish_statements)
-        {
-          test_macro_arms.push(quote!(
-              (#method_name setup #($#parameter_names_adjusted: tt)*) => {
-                #setup
-              };
-              (#method_name finish #($#parameter_names_adjusted: tt)*) => {
-                #finish
-              };
-          ));
-        }
+        let setup_statements = &analyzed_attributes.setup_statements;
+        let finish_statements = &analyzed_attributes.finish_statements;
+
+        test_macro_arms.push(quote!(
+            (#method_name setup #($#parameter_names_adjusted: tt)*) => {
+              #(#setup_statements) *
+            };
+            (#method_name finish #($#parameter_names_adjusted: tt)*) => {
+              #(#finish_statements) *
+            };
+        ));
         if analyzed_attributes.history_declarations.is_empty() {
           new_items.push(TraitItem::Method(method));
         } else if let Some(default) = method.default.as_ref() {
@@ -389,7 +348,8 @@ fn live_prop_test_item_trait(
             default,
             analyzed_signature,
             analyzed_attributes,
-          );
+            None,
+          )?;
           for method in replacement {
             new_items.push(TraitItem::Method(method));
           }
@@ -424,19 +384,49 @@ fn live_prop_test_item_impl(
   mut item_impl: ItemImpl,
   captured_attributes: Vec<LivePropTestAttribute>,
 ) -> Result<TokenStream, TokenStream> {
-  let _live_prop_test_attributes =
+  let live_prop_test_attributes =
     take_live_prop_test_attributes(&mut item_impl.attrs, captured_attributes)?;
+
+  let mut trait_path = None;
+  for attribute in live_prop_test_attributes {
+    for argument in attribute.arguments {
+      let mut valid = false;
+      if let NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+        path,
+        lit: Lit::Str(lit_str),
+        ..
+      })) = &argument
+      {
+        if path.is_ident("trait_path") {
+          valid = true;
+          if trait_path.is_some() {
+            return Err(
+              quote_spanned! {argument.span()=> compile_error!(r#"it doesn't make sense to specify more than one trait_path on the same impl"#);}
+                .into(),
+            );
+          }
+          trait_path = Some(lit_str.parse().map_err(|e| e.to_compile_error())?);
+        }
+      }
+      if !valid {
+        return Err(
+          quote_spanned! {argument.span()=> compile_error!(r#"unrecognized argument to #[live_prop_test(...)]; on an `impl` item, valid arguments are `trait_path="path"`"#);}.into()
+        );
+      }
+    }
+  }
 
   let mut new_items = Vec::with_capacity(item_impl.items.len());
   for item in std::mem::take(&mut item_impl.items) {
     match item {
       ImplItem::Method(method) => {
-        if method
-          .attrs
-          .iter()
-          .any(|attr| attr.path.is_ident("live_prop_test"))
+        if trait_path.is_some()
+          || method
+            .attrs
+            .iter()
+            .any(|attr| attr.path.is_ident("live_prop_test"))
         {
-          let replacement = live_prop_test_function(&method, Vec::new())?;
+          let replacement = live_prop_test_function(&method, Vec::new(), trait_path.as_ref())?;
           for method in replacement {
             new_items.push(ImplItem::Method(method));
           }
@@ -467,6 +457,7 @@ struct TestedFunctionShared {
 fn live_prop_test_function(
   function: &ImplItemMethod,
   captured_attributes: Vec<LivePropTestAttribute>,
+  trait_path: Option<&Path>,
 ) -> Result<Vec<ImplItemMethod>, TokenStream> {
   let ImplItemMethod {
     attrs,
@@ -485,13 +476,14 @@ fn live_prop_test_function(
     &live_prop_test_attributes,
     &analyzed_signature.mutable_reference_parameter_names,
   )?;
-  Ok(function_replacements(
+  function_replacements(
     &attrs,
     Some(quote!(#vis #defaultness)),
     block,
     analyzed_signature,
     analyzed_attributes,
-  ))
+    trait_path,
+  )
 }
 
 fn function_replacements<T: Parse>(
@@ -500,7 +492,8 @@ fn function_replacements<T: Parse>(
   block: &Block,
   analyzed_signature: AnalyzedSignature,
   analyzed_attributes: AnalyzedFunctionAttributes,
-) -> Vec<T> {
+  trait_path: Option<&Path>,
+) -> Result<Vec<T>, TokenStream> {
   let AnalyzedSignature {
     signature,
     display_meta_item,
@@ -508,6 +501,7 @@ fn function_replacements<T: Parse>(
     finish_setup,
     finish,
     return_type,
+    all_parameter_names,
     ..
   } = analyzed_signature;
 
@@ -517,7 +511,39 @@ fn function_replacements<T: Parse>(
     finish_statements,
   } = analyzed_attributes;
 
-  vec![
+  let (trait_setup, trait_finish) = match trait_path {
+    None => (None, None),
+    Some(trait_path) => {
+      let last_segment = trait_path.segments.last().unwrap();
+      match last_segment.arguments {
+        PathArguments::None => (),
+        _ => {
+          return Err(
+            quote_spanned! {last_segment.arguments.span()=> compile_error!(r#"trait_path needs to be written without arguments"#);}.into()
+          );
+        }
+      }
+      let trait_tests_macro_name = Ident::new(
+        &format!("__live_prop_test_trait_tests_for_{}", last_segment.ident),
+        Span::call_site(),
+      );
+      let method_name = &analyzed_signature.signature.ident;
+      let parameter_names_adjusted: Vec<Path> = all_parameter_names
+        .iter()
+        .map(|name| syn::parse_str(name).map_err(|e| e.to_compile_error()))
+        .collect::<Result<_, _>>()?;
+      (
+        Some(quote!(
+          #trait_tests_macro_name!(#method_name setup #($#parameter_names_adjusted: tt)*);
+        )),
+        Some(quote!(
+          #trait_tests_macro_name!(#method_name finish #($#parameter_names_adjusted: tt)*);
+        )),
+      )
+    }
+  };
+
+  Ok(vec![
     parse_quote!(
       #[cfg(not(debug_assertions))]
       // note: we can't just say #function because we do still need to purge any live_prop_test config attributes from the arguments
@@ -536,17 +562,19 @@ fn function_replacements<T: Parse>(
 
         #start_setup
         #(#setup_statements) *
+        #trait_setup
         #finish_setup
 
         let result = (|| -> #return_type #block)();
 
         #(#finish_statements) *
+        #trait_finish
         #finish
 
         result
       }
     ),
-  ]
+  ])
 }
 
 struct TestAttribute {
@@ -584,7 +612,7 @@ impl TestAttribute {
       }
       if !valid {
         return Err(
-            quote_spanned! {argument.span()=> compile_error!(r#"unrecognized argument to #[live_prop_test(...)]; valid arguments are `precondition="expr"` and `postcondition="expr"`"#);}.into()
+            quote_spanned! {argument.span()=> compile_error!(r#"unrecognized argument to #[live_prop_test(...)]; on a `fn` item, valid arguments are `precondition="expr"` and `postcondition="expr"`"#);}.into()
           );
       }
     }
