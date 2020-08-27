@@ -365,7 +365,19 @@ fn live_prop_test_item_trait(
           &analyzed_signature.mutable_reference_parameter_names,
         )?;
         let parameter_names = &analyzed_signature.all_parameter_names;
+        const SELF_REPLACEMENT: &str = "__live_prop_test_self_macro_parameter";
 
+        let parameter_names_adjusted: Vec<Path> = parameter_names
+          .iter()
+          .map(|name| {
+            syn::parse_str(if name == "self" {
+              SELF_REPLACEMENT
+            } else {
+              name
+            })
+            .map_err(|e| e.to_compile_error())
+          })
+          .collect::<Result<_, _>>()?;
         let method_name = &method.sig.ident;
         struct ReplaceParameterNames<'a> {
           parameter_names: &'a [String],
@@ -374,7 +386,12 @@ fn live_prop_test_item_trait(
         impl<'a> VisitMut for ReplaceParameterNames<'a> {
           fn visit_path_mut(&mut self, path: &mut Path) {
             if self.parameter_names.iter().any(|name| path.is_ident(name)) {
-              *path = parse_quote!($#path);
+              if path.is_ident("self") {
+                let self_replacement = Ident::new(SELF_REPLACEMENT, Span::call_site());
+                *path = parse_quote!($#self_replacement);
+              } else {
+                *path = parse_quote!($#path);
+              }
             }
           }
         }
@@ -391,10 +408,10 @@ fn live_prop_test_item_trait(
           .zip(&analyzed_attributes.finish_statements)
         {
           test_macro_arms.push(quote!(
-              (#method_name setup #($#parameter_names: tt)*) => {
+              (#method_name setup #($#parameter_names_adjusted: tt)*) => {
                 #setup
               };
-              (#method_name finish #($#parameter_names: tt)*) => {
+              (#method_name finish #($#parameter_names_adjusted: tt)*) => {
                 #finish
               };
           ));

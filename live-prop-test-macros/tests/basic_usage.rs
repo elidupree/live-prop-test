@@ -144,4 +144,8 @@ trait TestedTrait {
   fn method_with_default() {}
   #[live_prop_test(postcondition = "false")]
   fn method_without_default();
+  #[live_prop_test(postcondition = "false")]
+  fn self_method_with_default(&self, _b: i32) {}
+  #[live_prop_test(postcondition = "false")]
+  fn self_method_without_default(&self, _b: i32);
 }
