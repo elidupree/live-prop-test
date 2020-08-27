@@ -137,3 +137,11 @@ fn test_exp2_field_wrong_trait_method_fails() {
   ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field_wrong_trait_method();
 }
+
+#[live_prop_test]
+trait TestedTrait {
+  #[live_prop_test(postcondition = "false")]
+  fn method_with_default() {}
+  #[live_prop_test(postcondition = "false")]
+  fn method_without_default();
+}

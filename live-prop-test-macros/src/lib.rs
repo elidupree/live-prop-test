@@ -2,7 +2,7 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{quote, quote_spanned};
 use syn::parse::Parse;
 #[allow(unused_imports)]
 use syn::{
@@ -69,8 +69,10 @@ fn live_prop_test_impl(
   if let Ok(function) = syn::parse::<ImplItemMethod>(input.clone()) {
     let replacement = live_prop_test_function(&function, captured_attributes)?;
     Ok(quote! {#(#replacement) *}.into())
-  } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input) {
+  } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input.clone()) {
     live_prop_test_item_impl(item_impl, captured_attributes)
+  } else if let Ok(item_trait) = syn::parse::<ItemTrait>(input) {
+    live_prop_test_item_trait(item_trait, captured_attributes)
   } else {
     Err(quote! {compile_error! ("#[live_prop_test] can only be applied to a fn item, an impl item, or an argument in the signature of a fn that also has the attribute");}.into())
   }
@@ -340,7 +342,7 @@ fn remote_trait_method_stuff (attributes: & [LivePropTestAttribute], signature: 
   )
 } */
 
-fn live_prop_test_trait(
+fn live_prop_test_item_trait(
   mut item_trait: ItemTrait,
   captured_attributes: Vec<LivePropTestAttribute>,
 ) -> Result<TokenStream, TokenStream> {
@@ -391,17 +393,17 @@ fn live_prop_test_trait(
           test_macro_arms.push(quote!(
               (#method_name setup #($#parameter_names: tt)*) => {
                 #setup
-              }
+              };
               (#method_name finish #($#parameter_names: tt)*) => {
                 #finish
-              }
+              };
           ));
         }
         if !analyzed_attributes.history_declarations.is_empty() {
           if let Some(default) = method.default.as_ref() {
             let replacement = function_replacements(
               &method.attrs,
-              "",
+              None,
               default,
               analyzed_signature,
               analyzed_attributes,
@@ -464,7 +466,7 @@ fn live_prop_test_function(
   )?;
   Ok(function_replacements(
     &attrs,
-    quote!(#vis #defaultness),
+    Some(quote!(#vis #defaultness)),
     block,
     analyzed_signature,
     analyzed_attributes,
@@ -473,7 +475,7 @@ fn live_prop_test_function(
 
 fn function_replacements<T: Parse>(
   non_lpt_attributes: &[Attribute],
-  vis_defaultness: impl ToTokens,
+  vis_defaultness: Option<proc_macro2::TokenStream>,
   block: &Block,
   analyzed_signature: AnalyzedSignature,
   analyzed_attributes: AnalyzedFunctionAttributes,
