@@ -148,4 +148,33 @@ trait TestedTrait {
   fn self_method_with_default(&self, _b: i32) {}
   #[live_prop_test(postcondition = "false")]
   fn self_method_without_default(&self, _b: i32);
+  fn untested_method();
+}
+struct ImplementorWithoutAttribute;
+impl TestedTrait for ImplementorWithoutAttribute {
+  fn method_without_default() {}
+  fn self_method_without_default(&self, _b: i32) {}
+  fn untested_method() {}
+}
+
+#[test]
+fn implementor_without_attribute_passes_non_default() {
+  ::live_prop_test::initialize_for_internal_tests();
+  ImplementorWithoutAttribute::method_without_default();
+  ImplementorWithoutAttribute.self_method_without_default(5);
+  ImplementorWithoutAttribute::untested_method();
+}
+
+#[test]
+#[should_panic(expected = "postcondition")]
+fn implementor_without_attribute_fails_default() {
+  ::live_prop_test::initialize_for_internal_tests();
+  ImplementorWithoutAttribute::method_with_default();
+}
+
+#[test]
+#[should_panic(expected = "postcondition")]
+fn implementor_without_attribute_fails_default_self() {
+  ::live_prop_test::initialize_for_internal_tests();
+  ImplementorWithoutAttribute.self_method_with_default(5);
 }

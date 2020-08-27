@@ -416,19 +416,21 @@ fn live_prop_test_item_trait(
               };
           ));
         }
-        if !analyzed_attributes.history_declarations.is_empty() {
-          if let Some(default) = method.default.as_ref() {
-            let replacement = function_replacements(
-              &method.attrs,
-              None,
-              default,
-              analyzed_signature,
-              analyzed_attributes,
-            );
-            for method in replacement {
-              new_items.push(TraitItem::Method(method));
-            }
+        if analyzed_attributes.history_declarations.is_empty() {
+          new_items.push(TraitItem::Method(method));
+        } else if let Some(default) = method.default.as_ref() {
+          let replacement = function_replacements(
+            &method.attrs,
+            None,
+            default,
+            analyzed_signature,
+            analyzed_attributes,
+          );
+          for method in replacement {
+            new_items.push(TraitItem::Method(method));
           }
+        } else {
+          new_items.push(TraitItem::Method(method));
         }
       }
       _ => new_items.push(item.clone()),
