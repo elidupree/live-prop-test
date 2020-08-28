@@ -1,7 +1,7 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use proc_macro2::Span;
+use proc_macro2::{Group, Span, TokenTree};
 use quote::{quote, quote_spanned};
 use syn::parse::Parse;
 #[allow(unused_imports)]
@@ -211,14 +211,14 @@ impl<'a> AnalyzedSignature<'a> {
 }
 
 struct AnalyzedFunctionAttributes {
-  history_declarations: Vec<ItemMacro>,
-  setup_statements: Vec<Stmt>,
-  finish_statements: Vec<Stmt>,
+  setup_statements: Vec<proc_macro2::TokenStream>,
+  finish_statements: Vec<proc_macro2::TokenStream>,
 }
 
 impl AnalyzedFunctionAttributes {
   fn new(
     live_prop_test_attributes: &[LivePropTestAttribute],
+    histories_path: proc_macro2::TokenStream,
     mutable_reference_parameter_names: &[String],
   ) -> Result<Self, TokenStream> {
     let mut test_attributes = Vec::new();
@@ -228,21 +228,6 @@ impl AnalyzedFunctionAttributes {
       }
       test_attributes.push(TestAttribute::from_attr_arguments(&attribute.arguments)?)
     }
-    let history_identifiers: Vec<_> = test_attributes
-      .iter()
-      .enumerate()
-      .map(|(index, _)| {
-        Ident::new(
-          &format!("__LIVE_PROP_TEST_HISTORY_{}", index),
-          Span::call_site(),
-        )
-      })
-      .collect();
-    let history_declarations = history_identifiers.iter().map(|history_identifier|
-       parse_quote!(::std::thread_local! {
-      static #history_identifier: ::live_prop_test::TestHistory = ::live_prop_test::TestHistory::new();
-    })
-   ).collect();
     let test_bundles: Vec<TestBundle> = test_attributes
       .into_iter()
       .map(|attribute| attribute.bundle(&mutable_reference_parameter_names))
@@ -251,20 +236,27 @@ impl AnalyzedFunctionAttributes {
     let mut finish_statements = Vec::new();
     for (setup, finish) in test_bundles
       .into_iter()
-      .zip(history_identifiers)
       .enumerate()
-      .map(|(index, (bundle, history_identifier))| {
-        bundle.finalize(index, parse_quote!(#history_identifier))
-      })
+      .map(|(index, bundle)| bundle.finalize(index, quote!(&#histories_path[#index])))
     {
       setup_statements.push(setup);
       finish_statements.push(finish);
     }
     Ok(AnalyzedFunctionAttributes {
-      history_declarations,
       setup_statements,
       finish_statements,
     })
+  }
+
+  fn empty() -> Self {
+    AnalyzedFunctionAttributes {
+      setup_statements: Vec::new(),
+      finish_statements: Vec::new(),
+    }
+  }
+
+  fn is_empty(&self) -> bool {
+    self.setup_statements.is_empty()
   }
 }
 
@@ -279,6 +271,8 @@ fn live_prop_test_item_trait(
 
   let mut new_items = Vec::with_capacity(item_trait.items.len());
   let mut test_macro_arms = Vec::with_capacity(item_trait.items.len());
+  let mut test_histories_statics: Vec<ItemMacro> = Vec::with_capacity(item_trait.items.len());
+  let trait_name = &item_trait.ident;
   for item in std::mem::take(&mut item_trait.items) {
     match item {
       TraitItem::Method(mut method) => {
@@ -288,6 +282,7 @@ fn live_prop_test_item_trait(
         let analyzed_signature = AnalyzedSignature::new(&method.sig)?;
         let mut analyzed_attributes = AnalyzedFunctionAttributes::new(
           &live_prop_test_attributes,
+          quote!($__LIVE_PROP_TEST_HISTORIES),
           &analyzed_signature.mutable_reference_parameter_names,
         )?;
         let parameter_names = &analyzed_signature.all_parameter_names;
@@ -305,41 +300,39 @@ fn live_prop_test_item_trait(
           })
           .collect::<Result<_, _>>()?;
         let method_name = &method.sig.ident;
-        struct ReplaceParameterNames<'a> {
-          parameter_names: &'a [String],
-        }
 
-        impl<'a> VisitMut for ReplaceParameterNames<'a> {
-          fn visit_path_mut(&mut self, path: &mut Path) {
-            if self.parameter_names.iter().any(|name| path.is_ident(name)) {
-              if path.is_ident("self") {
-                let self_replacement = Ident::new(SELF_REPLACEMENT, Span::call_site());
-                *path = parse_quote!($#self_replacement);
-              } else {
-                *path = parse_quote!($#path);
-              }
-            }
-          }
-        }
         for statement in analyzed_attributes
           .setup_statements
           .iter_mut()
           .chain(&mut analyzed_attributes.finish_statements)
         {
-          ReplaceParameterNames { parameter_names }.visit_stmt_mut(statement);
+          *statement = replace_idents(std::mem::take(statement), &mut |ident| {
+            if ident == "self" {
+              TokenTree::Ident(Ident::new(SELF_REPLACEMENT, Span::call_site()))
+            } else if parameter_names.iter().any(|name| ident == name) {
+              TokenTree::Ident(Ident::new(&format!("${}", ident), Span::call_site()))
+            } else {
+              TokenTree::Ident(ident)
+            }
+          });
         }
         let setup_statements = &analyzed_attributes.setup_statements;
         let finish_statements = &analyzed_attributes.finish_statements;
 
         test_macro_arms.push(quote!(
-            (#method_name setup #($#parameter_names_adjusted: tt)*) => {
+            (#method_name setup $__LIVE_PROP_TEST_HISTORIES: tt #($#parameter_names_adjusted: tt)*) => {
               #(#setup_statements) *
             };
-            (#method_name finish #($#parameter_names_adjusted: tt)*) => {
+            (#method_name finish $__LIVE_PROP_TEST_HISTORIES: tt #($#parameter_names_adjusted: tt)*) => {
               #(#finish_statements) *
             };
         ));
-        if analyzed_attributes.history_declarations.is_empty() {
+        let num_bundles = setup_statements.len();
+        let initializers = (0..num_bundles).map(|_| quote!(::live_prop_test::TestHistory::new()));
+        test_histories_statics.push(parse_quote!(::std::thread_local! {
+          pub static #method_name: [::live_prop_test::TestHistory; #num_bundles] = [#(#initializers,)*];
+        }));
+        if analyzed_attributes.is_empty() {
           new_items.push(TraitItem::Method(method));
         } else if let Some(default) = method.default.as_ref() {
           let replacement = function_replacements(
@@ -347,8 +340,10 @@ fn live_prop_test_item_trait(
             None,
             default,
             analyzed_signature,
-            analyzed_attributes,
-            None,
+            // Don't apply the test bundles like they were independent tests for a normal function;
+            // delegate to the trait tests, same as any other impl
+            AnalyzedFunctionAttributes::empty(),
+            Some(&parse_quote!(#trait_name)),
           )?;
           for method in replacement {
             new_items.push(TraitItem::Method(method));
@@ -365,16 +360,33 @@ fn live_prop_test_item_trait(
     &format!("__live_prop_test_trait_tests_for_{}", item_trait.ident),
     Span::call_site(),
   );
+  let histories_module_name = Ident::new(
+    &format!("__live_prop_test_histories_for_{}", item_trait.ident),
+    Span::call_site(),
+  );
 
   item_trait.items = new_items;
-
-  Ok(
+  eprintln!(
+    "{}",
     quote! {
       #[doc(hidden)]
       macro_rules! #trait_tests_macro_name {
         #(#test_macro_arms) *
       }
+    }
+  );
+  Ok(
+    quote! {
       #item_trait
+      #[doc(hidden)]
+      pub mod #histories_module_name {
+        #(#test_histories_statics)*
+      }
+      #[doc(hidden)]
+      macro_rules! #trait_tests_macro_name {
+        #(#test_macro_arms) *
+      }
+
     }
     .into(),
   )
@@ -474,6 +486,7 @@ fn live_prop_test_function(
   let analyzed_signature = AnalyzedSignature::new(sig)?;
   let analyzed_attributes = AnalyzedFunctionAttributes::new(
     &live_prop_test_attributes,
+    parse_quote!(__live_prop_test_histories),
     &analyzed_signature.mutable_reference_parameter_names,
   )?;
   function_replacements(
@@ -506,15 +519,22 @@ fn function_replacements<T: Parse>(
   } = analyzed_signature;
 
   let AnalyzedFunctionAttributes {
-    history_declarations,
     setup_statements,
     finish_statements,
   } = analyzed_attributes;
 
+  let num_bundles = setup_statements.len();
+  let initializers = (0..num_bundles).map(|_| quote!(::live_prop_test::TestHistory::new()));
+  let histories_declaration: ItemMacro = parse_quote!(::std::thread_local! {
+    static __LIVE_PROP_TEST_HISTORIES: [::live_prop_test::TestHistory; #num_bundles] = [#(#initializers,)*];
+  });
+
   let (trait_setup, trait_finish) = match trait_path {
     None => (None, None),
     Some(trait_path) => {
-      let last_segment = trait_path.segments.last().unwrap();
+      let segments: Vec<_> = trait_path.segments.iter().collect();
+      let module_segments = &segments[..segments.len() - 1];
+      let last_segment = segments.last().unwrap();
       match last_segment.arguments {
         PathArguments::None => (),
         _ => {
@@ -523,21 +543,41 @@ fn function_replacements<T: Parse>(
           );
         }
       }
-      let trait_tests_macro_name = Ident::new(
+      let method_name = &analyzed_signature.signature.ident;
+      let trait_tests_macro_ident = Ident::new(
         &format!("__live_prop_test_trait_tests_for_{}", last_segment.ident),
         Span::call_site(),
       );
-      let method_name = &analyzed_signature.signature.ident;
+      let trait_tests_histories_path_end: Path = syn::parse_str(&format!(
+        "__live_prop_test_histories_for_{}::{}",
+        last_segment.ident, method_name
+      ))
+      .unwrap();
+      let trait_tests_macro_path = quote!(#(#module_segments::)*#trait_tests_macro_ident);
+      let trait_tests_histories_path =
+        quote!(#(#module_segments::)*#trait_tests_histories_path_end);
       let parameter_names_adjusted: Vec<Path> = all_parameter_names
         .iter()
         .map(|name| syn::parse_str(name).map_err(|e| e.to_compile_error()))
         .collect::<Result<_, _>>()?;
+      eprintln!(
+        "{}",
+        quote! {
+          #trait_tests_histories_path.with(|__live_prop_test_histories| {
+            #trait_tests_macro_path!(#method_name setup __live_prop_test_histories #(#parameter_names_adjusted) *);
+          });
+        }
+      );
       (
         Some(quote!(
-          #trait_tests_macro_name!(#method_name setup #($#parameter_names_adjusted: tt)*);
+          #trait_tests_histories_path.with(|__live_prop_test_histories| {
+            #trait_tests_macro_path!(#method_name setup __live_prop_test_histories #(#parameter_names_adjusted) *);
+          });
         )),
         Some(quote!(
-          #trait_tests_macro_name!(#method_name finish #($#parameter_names_adjusted: tt)*);
+          #trait_tests_histories_path.with(|__live_prop_test_histories| {
+            #trait_tests_macro_path!(#method_name finish __live_prop_test_histories #($#parameter_names_adjusted: tt)*);
+          });
         )),
       )
     }
@@ -557,21 +597,23 @@ fn function_replacements<T: Parse>(
       #(#non_lpt_attributes) *
       #vis_defaultness #signature
       {
-        #(#history_declarations) *
+        #histories_declaration
         #display_meta_item
 
         #start_setup
-        #(#setup_statements) *
-        #trait_setup
-        #finish_setup
+        __LIVE_PROP_TEST_HISTORIES.with(|__live_prop_test_histories| {
+          #(#setup_statements) *
+          #trait_setup
+          #finish_setup
 
-        let result = (|| -> #return_type #block)();
+          let result = (|| -> #return_type #block)();
 
-        #(#finish_statements) *
-        #trait_finish
-        #finish
+          #(#finish_statements) *
+          #trait_finish
+          #finish
 
-        result
+          result
+        })
       }
     ),
   ])
@@ -765,7 +807,11 @@ struct TestBundle {
 }
 
 impl TestBundle {
-  fn finalize(&self, unique_id: usize, history: Expr) -> (Stmt, Stmt) {
+  fn finalize(
+    &self,
+    unique_id: usize,
+    history: proc_macro2::TokenStream,
+  ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let test_temporaries_identifier = Ident::new(
       &format!("__LIVE_PROP_TEST_TEMPORARIES_IDENTIFIER_{}", unique_id),
       Span::call_site(),
@@ -775,24 +821,37 @@ impl TestBundle {
     let finish_closure = &self.finish_closure;
 
     let setup = parse_quote! (
-      let #test_temporaries_identifier = #history.with(|__live_prop_test_history| {
-        __live_prop_test_setup.setup_test(
-          __live_prop_test_history,
-          #setup_closure,
-        )
-      });
+      let #test_temporaries_identifier = __live_prop_test_setup.setup_test(
+        #history,
+        #setup_closure,
+      );
     );
 
     let finish = parse_quote! (
-      #history.with(|__live_prop_test_history| {
-        __live_prop_test_finisher.finish_test(
-          __live_prop_test_history,
-          #test_temporaries_identifier,
-          #finish_closure,
-        )
-      });
+      __live_prop_test_finisher.finish_test(
+        #history,
+        #test_temporaries_identifier,
+        #finish_closure,
+      );
     );
 
     (setup, finish)
   }
+}
+
+fn replace_idents(
+  stream: proc_macro2::TokenStream,
+  replace: &mut impl FnMut(Ident) -> TokenTree,
+) -> proc_macro2::TokenStream {
+  stream
+    .into_iter()
+    .map(|tree| match tree {
+      TokenTree::Ident(ident) => replace(ident),
+      TokenTree::Group(group) => TokenTree::Group(Group::new(
+        group.delimiter(),
+        replace_idents(group.stream(), replace),
+      )),
+      _ => tree,
+    })
+    .collect()
 }
