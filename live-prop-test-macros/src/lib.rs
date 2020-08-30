@@ -2,6 +2,7 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Group, Span, TokenTree};
+use proc_macro_error::{abort, abort_call_site, proc_macro_error};
 use quote::{quote, quote_spanned};
 use syn::parse::Parse;
 #[allow(unused_imports)]
@@ -19,6 +20,7 @@ use syn::{
 use syn::{Block, Index, ItemConst, PathArguments};
 
 /// caveat about Self and generic parameters of the containing impl
+#[proc_macro_error]
 #[proc_macro_attribute]
 pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream {
   #[allow(clippy::let_and_return)]
@@ -74,7 +76,7 @@ fn live_prop_test_impl(
   } else if let Ok(item_trait) = syn::parse::<ItemTrait>(input) {
     live_prop_test_item_trait(item_trait, captured_attributes)
   } else {
-    Err(quote! {compile_error! ("#[live_prop_test] can only be applied to a fn item, an impl item, or an argument in the signature of a fn that also has the attribute");}.into())
+    abort_call_site!("#[live_prop_test] can only be applied to a fn item, an impl item, or an argument in the signature of a fn that also has the attribute")
   }
 }
 
@@ -88,48 +90,50 @@ struct AnalyzedParameter {
 fn analyzed_parameters<'a>(
   originals: impl IntoIterator<Item = &'a FnArg>,
 ) -> Result<Vec<AnalyzedParameter>, TokenStream> {
-  originals.into_iter().map (| original | {
-    match original {
-      FnArg::Receiver(receiver) => {
-        Ok(AnalyzedParameter {
-          //original: original.clone(),
-          name_expr: parse_quote!(self),
-          name_string: "self".to_string(),
-          is_mutable_reference: receiver.reference.is_some() && receiver.mutability.is_some(),
-          regression_prefix: "",
-        })
-      }
-      FnArg::Typed(pat_type) => {
-        let regression_prefix = match &*pat_type.ty {
-          Type::Reference(reference) => {
-            if reference.mutability.is_some() {
-              "&mut "
-            } else {
-              "&"
+  originals
+    .into_iter()
+    .map(|original| {
+      match original {
+        FnArg::Receiver(receiver) => {
+          Ok(AnalyzedParameter {
+            //original: original.clone(),
+            name_expr: parse_quote!(self),
+            name_string: "self".to_string(),
+            is_mutable_reference: receiver.reference.is_some() && receiver.mutability.is_some(),
+            regression_prefix: "",
+          })
+        }
+        FnArg::Typed(pat_type) => {
+          let regression_prefix = match &*pat_type.ty {
+            Type::Reference(reference) => {
+              if reference.mutability.is_some() {
+                "&mut "
+              } else {
+                "&"
+              }
             }
-          }
-          _ => "",
-        };
-        let is_mutable_reference = regression_prefix == "&mut ";
-        match &*pat_type.pat {
-          Pat::Ident(PatIdent { ident, .. }) => {
-            Ok(AnalyzedParameter {
-              //original: original.clone(),
-              name_expr: parse_quote!(#ident),
-              name_string: ident.to_string(),
-              is_mutable_reference,
-              regression_prefix,
-            })
-          }
-          pat => {
-            Err(
-              quote_spanned! {pat.span()=> compile_error! ("live-prop-test only supports function arguments that are bound as an identifier");}.into(),
-            )
+            _ => "",
+          };
+          let is_mutable_reference = regression_prefix == "&mut ";
+          match &*pat_type.pat {
+            Pat::Ident(PatIdent { ident, .. }) => {
+              Ok(AnalyzedParameter {
+                //original: original.clone(),
+                name_expr: parse_quote!(#ident),
+                name_string: ident.to_string(),
+                is_mutable_reference,
+                regression_prefix,
+              })
+            }
+            pat => abort!(
+              pat.span(),
+              "live-prop-test only supports function arguments that are bound as an identifier"
+            ),
           }
         }
       }
-    }
-  }).collect()
+    })
+    .collect()
 }
 
 struct AnalyzedSignature<'a> {
@@ -154,10 +158,16 @@ impl<'a> AnalyzedSignature<'a> {
     } = signature;
 
     if let Some(constness) = constness {
-      return Err(quote_spanned! {constness.span=> compile_error! ("live-prop-test doesn't support testing const fn items");}.into());
+      abort!(
+        constness.span,
+        "live-prop-test doesn't support testing const fn items"
+      )
     }
     if let Some(asyncness) = asyncness {
-      return Err(quote_spanned! {asyncness.span=> compile_error! ("live-prop-test doesn't support testing async fn items");}.into());
+      abort!(
+        asyncness.span,
+        "live-prop-test doesn't support testing async fn items"
+      )
     }
 
     let num_parameters = parameters.len();
@@ -224,7 +234,10 @@ impl AnalyzedFunctionAttributes {
     let mut test_attributes = Vec::new();
     for attribute in live_prop_test_attributes {
       if attribute.arguments.is_empty() {
-        return Err(quote_spanned! {attribute.span=> compile_error! ("#[live_prop_test] attribute on fn item expects an argument");}.into());
+        abort!(
+          attribute.span,
+          "#[live_prop_test] attribute on fn item expects an argument"
+        )
       }
       test_attributes.push(TestAttribute::from_attr_arguments(&attribute.arguments)?)
     }
@@ -371,16 +384,6 @@ fn live_prop_test_item_trait(
   );
 
   item_trait.items = new_items;
-  eprintln!(
-    "{}",
-    quote! {
-      #[doc(hidden)]
-      #[macro_export]
-      macro_rules! #trait_tests_macro_name {
-        #(#test_macro_arms) *
-      }
-    }
-  );
   Ok(
     quote! {
       #item_trait
@@ -419,18 +422,19 @@ fn live_prop_test_item_impl(
         if path.is_ident("trait_path") {
           valid = true;
           if trait_path.is_some() {
-            return Err(
-              quote_spanned! {argument.span()=> compile_error!(r#"it doesn't make sense to specify more than one trait_path on the same impl"#);}
-                .into(),
-            );
+            abort!(
+              argument.span(),
+              "it doesn't make sense to specify more than one trait_path on the same impl"
+            )
           }
           trait_path = Some(lit_str.parse().map_err(|e| e.to_compile_error())?);
         }
       }
       if !valid {
-        return Err(
-          quote_spanned! {argument.span()=> compile_error!(r#"unrecognized argument to #[live_prop_test(...)]; on an `impl` item, valid arguments are `trait_path="path"`"#);}.into()
-        );
+        abort!(
+          argument.span(),
+          r#"unrecognized argument to #[live_prop_test(...)]; on an `impl` item, valid arguments are `trait_path="path"`"#
+        )
       }
     }
   }
@@ -544,11 +548,10 @@ fn function_replacements<T: Parse>(
       let last_segment = segments.last().unwrap();
       match last_segment.arguments {
         PathArguments::None => (),
-        _ => {
-          return Err(
-            quote_spanned! {last_segment.arguments.span()=> compile_error!(r#"trait_path needs to be written without arguments"#);}.into()
-          );
-        }
+        _ => abort!(
+          last_segment.arguments.span(),
+          "trait_path needs to be written without arguments"
+        ),
       }
       let method_name = &analyzed_signature.signature.ident;
       let trait_tests_macro_ident = Ident::new(
@@ -567,14 +570,6 @@ fn function_replacements<T: Parse>(
         .iter()
         .map(|name| syn::parse_str(name).map_err(|e| e.to_compile_error()))
         .collect::<Result<_, _>>()?;
-      eprintln!(
-        "{}",
-        quote! {
-          #trait_tests_histories_path.with(|__live_prop_test_histories| {
-            #trait_tests_macro_path!(#method_name setup __live_prop_test_histories #(#parameter_names_adjusted) *);
-          });
-        }
-      );
       (
         Some(quote!(
           let __live_prop_test_trait_temporaries = #trait_tests_histories_path.with(|__live_prop_test_histories| {
@@ -691,27 +686,26 @@ impl TestAttribute {
       old_expressions: Vec<Expr>,
       old_identifiers: Vec<Ident>,
       next_index: usize,
-      result: Result<(), TokenStream>,
       mutable_reference_parameter_names: &'a [String],
     }
 
-    struct ForbidRecursiveOldExpressions<'a> {
-      result: &'a mut Result<(), TokenStream>,
-    }
+    struct ForbidRecursiveOldExpressions;
 
     let mut collector = CollectOldExpressions {
       old_expressions: Vec::new(),
       old_identifiers: Vec::new(),
       next_index: 0,
-      result: Ok(()),
       mutable_reference_parameter_names,
     };
 
-    impl<'a> Visit<'a> for ForbidRecursiveOldExpressions<'a> {
+    impl<'a> Visit<'a> for ForbidRecursiveOldExpressions {
       fn visit_expr_call(&mut self, call: &'a ExprCall) {
         if let Expr::Path(path) = &*call.func {
           if path.path.is_ident("old") {
-            *self.result = Err (quote_spanned! {call.span()=> compile_error!(r#"it doesn't make sense to use `old` inside another `old` expression"#);}.into());
+            abort!(
+              call.span(),
+              "it doesn't make sense to use `old` inside another `old` expression"
+            )
           }
         }
         visit::visit_expr_call(self, call);
@@ -724,7 +718,7 @@ impl TestAttribute {
           if path.path.is_ident("old") {
             if let Some(first) = call.args.first() {
               if call.args.len() > 1 {
-                self.result = Err (quote_spanned! {call.span()=> compile_error!(r#"`old` can only have one "argument""#);}.into());
+                abort!(call.span(), r#"`old` can only have one "argument""#)
               } else {
                 if let Expr::Path(path) = &first {
                   if let Some(name) = self
@@ -732,15 +726,20 @@ impl TestAttribute {
                     .iter()
                     .find(|name| path.path.is_ident(name))
                   {
-                    let error_message = format!("tried to store `old` value of the argument `{name}`, which is an &mut reference rather than an owned value. Did you mean `*{name}` or `{name}.clone()`?", name=name);
-                    self.result =
-                      Err(quote_spanned! {call.span()=> compile_error!(#error_message);}.into());
+                    abort!(
+                      call.span(),
+                      "tried to store `old` value of the argument `{}`, which is an &mut reference rather than an owned value. Did you mean `*{}` or `{}.clone()`?",
+                      name,name,name
+                    )
                   }
                 }
                 return Some(first.clone());
               }
             } else {
-              self.result = Err (quote_spanned! {call.span()=> compile_error!(r#"`old` requires an expression as its "argument""#);}.into());
+              abort!(
+                call.span(),
+                r#"`old` requires an expression as its "argument""#
+              )
             }
           }
         }
@@ -758,10 +757,7 @@ impl TestAttribute {
     impl<'a> VisitMut for CollectOldExpressions<'a> {
       fn visit_expr_mut(&mut self, expr: &mut Expr) {
         if let Some(old_expression) = self.expr_old_expression(expr) {
-          ForbidRecursiveOldExpressions {
-            result: &mut self.result,
-          }
-          .visit_expr(&old_expression);
+          ForbidRecursiveOldExpressions.visit_expr(&old_expression);
           let old_identifier = Ident::new(
             &format!("__live_prop_test_old_value_{}", self.next_index),
             expr.span(),
@@ -784,7 +780,6 @@ impl TestAttribute {
       })
       .collect();
 
-    collector.result?;
     let old_expressions = collector.old_expressions;
     let old_identifiers = collector.old_identifiers;
 
