@@ -16,7 +16,7 @@ use syn::{
   ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Path, ReturnType, Signature,
   Stmt, Token, TraitItem, TraitItemMethod, Type,
 };
-use syn::{Block, ItemConst, PathArguments};
+use syn::{Block, Index, ItemConst, PathArguments};
 
 /// caveat about Self and generic parameters of the containing impl
 #[proc_macro_attribute]
@@ -211,7 +211,7 @@ impl<'a> AnalyzedSignature<'a> {
 }
 
 struct AnalyzedFunctionAttributes {
-  setup_statements: Vec<proc_macro2::TokenStream>,
+  setup_expressions: Vec<proc_macro2::TokenStream>,
   finish_statements: Vec<proc_macro2::TokenStream>,
 }
 
@@ -232,31 +232,36 @@ impl AnalyzedFunctionAttributes {
       .into_iter()
       .map(|attribute| attribute.bundle(&mutable_reference_parameter_names))
       .collect::<Result<_, _>>()?;
-    let mut setup_statements = Vec::new();
+    let mut setup_expressions = Vec::new();
     let mut finish_statements = Vec::new();
-    for (setup, finish) in test_bundles
-      .into_iter()
-      .enumerate()
-      .map(|(index, bundle)| bundle.finalize(index, quote!(&#histories_path[#index])))
-    {
-      setup_statements.push(setup);
+    for (setup, finish) in test_bundles.into_iter().enumerate().map(|(index, bundle)| {
+      let index = Index {
+        index: index as u32,
+        span: Span::call_site(),
+      };
+      bundle.finalize(
+        quote!(&#histories_path[#index]),
+        quote!(__live_prop_test_temporaries.#index),
+      )
+    }) {
+      setup_expressions.push(setup);
       finish_statements.push(finish);
     }
     Ok(AnalyzedFunctionAttributes {
-      setup_statements,
+      setup_expressions,
       finish_statements,
     })
   }
 
   fn empty() -> Self {
     AnalyzedFunctionAttributes {
-      setup_statements: Vec::new(),
+      setup_expressions: Vec::new(),
       finish_statements: Vec::new(),
     }
   }
 
   fn is_empty(&self) -> bool {
-    self.setup_statements.is_empty()
+    self.setup_expressions.is_empty()
   }
 }
 
@@ -302,7 +307,7 @@ fn live_prop_test_item_trait(
         let method_name = &method.sig.ident;
 
         for statement in analyzed_attributes
-          .setup_statements
+          .setup_expressions
           .iter_mut()
           .chain(&mut analyzed_attributes.finish_statements)
         {
@@ -316,18 +321,18 @@ fn live_prop_test_item_trait(
             }
           });
         }
-        let setup_statements = &analyzed_attributes.setup_statements;
+        let setup_expressions = &analyzed_attributes.setup_expressions;
         let finish_statements = &analyzed_attributes.finish_statements;
 
         test_macro_arms.push(quote!(
             (#method_name setup $__LIVE_PROP_TEST_HISTORIES: tt #($#parameter_names_adjusted: tt)*) => {
-              #(#setup_statements) *
+              #(#setup_expressions) *
             };
             (#method_name finish $__LIVE_PROP_TEST_HISTORIES: tt #($#parameter_names_adjusted: tt)*) => {
               #(#finish_statements) *
             };
         ));
-        let num_bundles = setup_statements.len();
+        let num_bundles = setup_expressions.len();
         let initializers = (0..num_bundles).map(|_| quote!(::live_prop_test::TestHistory::new()));
         test_histories_statics.push(parse_quote!(::std::thread_local! {
           pub static #method_name: [::live_prop_test::TestHistory; #num_bundles] = [#(#initializers,)*];
@@ -519,11 +524,11 @@ fn function_replacements<T: Parse>(
   } = analyzed_signature;
 
   let AnalyzedFunctionAttributes {
-    setup_statements,
+    setup_expressions,
     finish_statements,
   } = analyzed_attributes;
 
-  let num_bundles = setup_statements.len();
+  let num_bundles = setup_expressions.len();
   let initializers = (0..num_bundles).map(|_| quote!(::live_prop_test::TestHistory::new()));
   let histories_declaration: ItemMacro = parse_quote!(::std::thread_local! {
     static __LIVE_PROP_TEST_HISTORIES: [::live_prop_test::TestHistory; #num_bundles] = [#(#initializers,)*];
@@ -560,14 +565,7 @@ fn function_replacements<T: Parse>(
         .iter()
         .map(|name| syn::parse_str(name).map_err(|e| e.to_compile_error()))
         .collect::<Result<_, _>>()?;
-      eprintln!(
-        "{}",
-        quote! {
-          #trait_tests_histories_path.with(|__live_prop_test_histories| {
-            #trait_tests_macro_path!(#method_name setup __live_prop_test_histories #(#parameter_names_adjusted) *);
-          });
-        }
-      );
+
       (
         Some(quote!(
           #trait_tests_histories_path.with(|__live_prop_test_histories| {
@@ -602,7 +600,7 @@ fn function_replacements<T: Parse>(
 
         #start_setup
         __LIVE_PROP_TEST_HISTORIES.with(|__live_prop_test_histories| {
-          #(#setup_statements) *
+          let __live_prop_test_temporaries = (#(#setup_expressions,)*);
           #trait_setup
           #finish_setup
 
@@ -809,28 +807,23 @@ struct TestBundle {
 impl TestBundle {
   fn finalize(
     &self,
-    unique_id: usize,
     history: proc_macro2::TokenStream,
+    temporaries: proc_macro2::TokenStream,
   ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
-    let test_temporaries_identifier = Ident::new(
-      &format!("__LIVE_PROP_TEST_TEMPORARIES_IDENTIFIER_{}", unique_id),
-      Span::call_site(),
-    );
-
     let setup_closure = &self.setup_closure;
     let finish_closure = &self.finish_closure;
 
     let setup = parse_quote! (
-      let #test_temporaries_identifier = __live_prop_test_setup.setup_test(
+      __live_prop_test_setup.setup_test(
         #history,
         #setup_closure,
-      );
+      )
     );
 
     let finish = parse_quote! (
       __live_prop_test_finisher.finish_test(
         #history,
-        #test_temporaries_identifier,
+        #temporaries,
         #finish_closure,
       );
     );
