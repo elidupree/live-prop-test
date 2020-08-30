@@ -157,7 +157,7 @@ impl TestedTrait for ImplementorWithoutAttribute {
   fn untested_method() {}
 }
 struct ImplementorWithAttribute;
-#[live_prop_test(trait_path = "TestedTrait")]
+#[live_prop_test(trait_path = "crate::TestedTrait")]
 impl TestedTrait for ImplementorWithAttribute {
   fn method_without_default() {}
   fn self_method_without_default(&self, _b: i32) {}

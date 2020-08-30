@@ -325,11 +325,11 @@ fn live_prop_test_item_trait(
         let finish_statements = &analyzed_attributes.finish_statements;
 
         test_macro_arms.push(quote!(
-            (#method_name setup $__LIVE_PROP_TEST_HISTORIES: tt #($#parameter_names_adjusted: tt)*) => {
-              #(#setup_expressions) *
+            (#method_name setup $__live_prop_test_setup: tt $__LIVE_PROP_TEST_HISTORIES: tt #($#parameter_names_adjusted: tt)*) => {
+              {let __live_prop_test_setup = &mut $__live_prop_test_setup; (#(#setup_expressions,)*)}
             };
-            (#method_name finish $__LIVE_PROP_TEST_HISTORIES: tt #($#parameter_names_adjusted: tt)*) => {
-              #(#finish_statements) *
+            (#method_name finish $__live_prop_test_finisher: tt $__LIVE_PROP_TEST_HISTORIES: tt $__live_prop_test_temporaries: tt #($#parameter_names_adjusted: tt)*) => {
+              {let __live_prop_test_finisher = &mut $__live_prop_test_finisher; #(#finish_statements) *}
             };
         ));
         let num_bundles = setup_expressions.len();
@@ -375,6 +375,7 @@ fn live_prop_test_item_trait(
     "{}",
     quote! {
       #[doc(hidden)]
+      #[macro_export]
       macro_rules! #trait_tests_macro_name {
         #(#test_macro_arms) *
       }
@@ -388,6 +389,7 @@ fn live_prop_test_item_trait(
         #(#test_histories_statics)*
       }
       #[doc(hidden)]
+      #[macro_export]
       macro_rules! #trait_tests_macro_name {
         #(#test_macro_arms) *
       }
@@ -565,16 +567,23 @@ fn function_replacements<T: Parse>(
         .iter()
         .map(|name| syn::parse_str(name).map_err(|e| e.to_compile_error()))
         .collect::<Result<_, _>>()?;
-
-      (
-        Some(quote!(
+      eprintln!(
+        "{}",
+        quote! {
           #trait_tests_histories_path.with(|__live_prop_test_histories| {
             #trait_tests_macro_path!(#method_name setup __live_prop_test_histories #(#parameter_names_adjusted) *);
+          });
+        }
+      );
+      (
+        Some(quote!(
+          let __live_prop_test_trait_temporaries = #trait_tests_histories_path.with(|__live_prop_test_histories| {
+            #trait_tests_macro_path!(#method_name setup __live_prop_test_setup __live_prop_test_histories #(#parameter_names_adjusted) *);
           });
         )),
         Some(quote!(
           #trait_tests_histories_path.with(|__live_prop_test_histories| {
-            #trait_tests_macro_path!(#method_name finish __live_prop_test_histories #($#parameter_names_adjusted: tt)*);
+            #trait_tests_macro_path!(#method_name finish __live_prop_test_finisher __live_prop_test_histories __live_prop_test_trait_temporaries #($#parameter_names_adjusted: tt)*);
           });
         )),
       )
