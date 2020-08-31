@@ -99,7 +99,7 @@ impl Fielded {
     self.field = 2 << self.field
   }
 
-  #[live_prop_test(postcondition = "self.field == old(self.field)")]
+  #[live_prop_test(postcondition = "*result == old(self.field)")]
   fn get_field_mut(&mut self) -> &mut i32 {
     &mut self.field
   }
@@ -109,6 +109,7 @@ trait Exp2Field {
   fn exp2_field_wrong_trait_method(&mut self);
 }
 
+#[live_prop_test]
 impl Exp2Field for Fielded {
   #[live_prop_test(postcondition = "test_exp2(old(self.field), self.field)")]
   fn exp2_field_wrong_trait_method(&mut self) {
@@ -141,6 +142,35 @@ fn test_exp2_field_wrong_inherent_method_fails() {
 fn test_exp2_field_wrong_trait_method_fails() {
   ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field_wrong_trait_method();
+}
+
+#[derive(Debug)]
+struct GenericStruct<T>(T);
+
+#[live_prop_test]
+impl<T: ::std::fmt::Debug> GenericStruct<T> {
+  #[live_prop_test(postcondition = "true")]
+  fn get_field_mut(&mut self) -> &mut T {
+    &mut self.0
+  }
+}
+
+#[live_prop_test]
+impl<T: ::std::fmt::Debug> ::std::clone::Clone for GenericStruct<T>
+where
+  T: ::std::clone::Clone,
+{
+  #[live_prop_test(postcondition = "true")]
+  fn clone(&self) -> Self {
+    GenericStruct(::std::clone::Clone::clone(&self.0))
+  }
+}
+
+#[test]
+fn call_get_field_muts() {
+  ::live_prop_test::initialize_for_internal_tests();
+  (Fielded { field: 4 }).get_field_mut();
+  GenericStruct(5).get_field_mut();
 }
 
 /*#[live_prop_test]
