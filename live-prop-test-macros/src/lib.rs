@@ -2,8 +2,8 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Group, Span, TokenTree};
-use proc_macro_error::{abort, abort_call_site, proc_macro_error};
-use quote::{quote, quote_spanned};
+use proc_macro_error::{abort, abort_call_site, proc_macro_error, ResultExt};
+use quote::quote;
 use syn::parse::Parse;
 #[allow(unused_imports)]
 use syn::{
@@ -24,10 +24,7 @@ use syn::{Block, Index, ItemConst, PathArguments};
 #[proc_macro_attribute]
 pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream {
   #[allow(clippy::let_and_return)]
-  let result = match live_prop_test_impl(arguments, input) {
-    Ok(tokens) => tokens,
-    Err(err) => err,
-  };
+  let result = live_prop_test_impl(arguments, input);
   //eprintln!("{}", result);
   result
 }
@@ -40,12 +37,12 @@ struct LivePropTestAttribute {
 fn take_live_prop_test_attributes(
   attributes: &mut Vec<Attribute>,
   mut captured: Vec<LivePropTestAttribute>,
-) -> Result<Vec<LivePropTestAttribute>, TokenStream> {
+) -> Vec<LivePropTestAttribute> {
   for attribute in attributes.iter_mut() {
     if attribute.path.is_ident("live_prop_test") {
       let arguments: AttrArguments = attribute
         .parse_args_with(Punctuated::parse_terminated)
-        .map_err(|e| e.to_compile_error())?;
+        .unwrap_or_abort();
       captured.push(LivePropTestAttribute {
         arguments,
         span: attribute.span(),
@@ -53,24 +50,21 @@ fn take_live_prop_test_attributes(
     }
   }
   attributes.retain(|attribute| !attribute.path.is_ident("live_prop_test"));
-  Ok(captured)
+  captured
 }
 
-fn live_prop_test_impl(
-  arguments: TokenStream,
-  input: TokenStream,
-) -> Result<TokenStream, TokenStream> {
+fn live_prop_test_impl(arguments: TokenStream, input: TokenStream) -> TokenStream {
   let arguments: AttrArguments = Punctuated::parse_terminated
     .parse(arguments)
-    .map_err(|e| e.to_compile_error())?;
+    .unwrap_or_abort();
   let captured_attributes = vec![LivePropTestAttribute {
     arguments,
     span: Span::call_site(),
   }];
 
   if let Ok(function) = syn::parse::<ImplItemMethod>(input.clone()) {
-    let replacement = live_prop_test_function(&function, captured_attributes, None)?;
-    Ok(quote! {#(#replacement) *}.into())
+    let replacement = live_prop_test_function(&function, captured_attributes, None);
+    (quote! {#(#replacement) *}).into()
   } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input.clone()) {
     live_prop_test_item_impl(item_impl, captured_attributes)
   } else if let Ok(item_trait) = syn::parse::<ItemTrait>(input) {
@@ -89,19 +83,19 @@ struct AnalyzedParameter {
 }
 fn analyzed_parameters<'a>(
   originals: impl IntoIterator<Item = &'a FnArg>,
-) -> Result<Vec<AnalyzedParameter>, TokenStream> {
+) -> Vec<AnalyzedParameter> {
   originals
     .into_iter()
     .map(|original| {
       match original {
         FnArg::Receiver(receiver) => {
-          Ok(AnalyzedParameter {
+          AnalyzedParameter {
             //original: original.clone(),
             name_expr: parse_quote!(self),
             name_string: "self".to_string(),
             is_mutable_reference: receiver.reference.is_some() && receiver.mutability.is_some(),
             regression_prefix: "",
-          })
+          }
         }
         FnArg::Typed(pat_type) => {
           let regression_prefix = match &*pat_type.ty {
@@ -117,13 +111,13 @@ fn analyzed_parameters<'a>(
           let is_mutable_reference = regression_prefix == "&mut ";
           match &*pat_type.pat {
             Pat::Ident(PatIdent { ident, .. }) => {
-              Ok(AnalyzedParameter {
+              AnalyzedParameter {
                 //original: original.clone(),
                 name_expr: parse_quote!(#ident),
                 name_string: ident.to_string(),
                 is_mutable_reference,
                 regression_prefix,
-              })
+              }
             }
             pat => abort!(
               pat.span(),
@@ -147,7 +141,7 @@ struct AnalyzedSignature<'a> {
   mutable_reference_parameter_names: Vec<String>,
 }
 impl<'a> AnalyzedSignature<'a> {
-  fn new(signature: &'a Signature) -> Result<Self, TokenStream> {
+  fn new(signature: &'a Signature) -> Self {
     let Signature {
       constness,
       asyncness,
@@ -171,7 +165,7 @@ impl<'a> AnalyzedSignature<'a> {
     }
 
     let num_parameters = parameters.len();
-    let analyzed = analyzed_parameters(parameters)?;
+    let analyzed = analyzed_parameters(parameters);
     let parameter_name_exprs: Vec<_> = analyzed.iter().map(|a| &a.name_expr).collect();
     let parameter_regression_prefixes = analyzed.iter().map(|a| &a.regression_prefix);
     let mutable_reference_parameter_names = analyzed
@@ -186,7 +180,7 @@ impl<'a> AnalyzedSignature<'a> {
       ReturnType::Type(_, t) => (**t).clone(),
     };
 
-    Ok(AnalyzedSignature {
+    AnalyzedSignature {
       signature,
       display_meta_item: parse_quote!(
               const __LIVE_PROP_TEST_DISPLAY_META: ::live_prop_test::TestFunctionDisplayMeta = ::live_prop_test::TestFunctionDisplayMeta {
@@ -216,7 +210,7 @@ impl<'a> AnalyzedSignature<'a> {
         __live_prop_test_finisher.finish(__LIVE_PROP_TEST_DISPLAY_META);),
       all_parameter_names,
       mutable_reference_parameter_names,
-    })
+    }
   }
 }
 
@@ -230,7 +224,7 @@ impl AnalyzedFunctionAttributes {
     live_prop_test_attributes: &[LivePropTestAttribute],
     histories_path: proc_macro2::TokenStream,
     mutable_reference_parameter_names: &[String],
-  ) -> Result<Self, TokenStream> {
+  ) -> Self {
     let mut test_attributes = Vec::new();
     for attribute in live_prop_test_attributes {
       if attribute.arguments.is_empty() {
@@ -239,12 +233,12 @@ impl AnalyzedFunctionAttributes {
           "#[live_prop_test] attribute on fn item expects an argument"
         )
       }
-      test_attributes.push(TestAttribute::from_attr_arguments(&attribute.arguments)?)
+      test_attributes.push(TestAttribute::from_attr_arguments(&attribute.arguments))
     }
     let test_bundles: Vec<TestBundle> = test_attributes
       .into_iter()
       .map(|attribute| attribute.bundle(&mutable_reference_parameter_names))
-      .collect::<Result<_, _>>()?;
+      .collect();
     let mut setup_expressions = Vec::new();
     let mut finish_statements = Vec::new();
     for (setup, finish) in test_bundles.into_iter().enumerate().map(|(index, bundle)| {
@@ -260,10 +254,10 @@ impl AnalyzedFunctionAttributes {
       setup_expressions.push(setup);
       finish_statements.push(finish);
     }
-    Ok(AnalyzedFunctionAttributes {
+    AnalyzedFunctionAttributes {
       setup_expressions,
       finish_statements,
-    })
+    }
   }
 
   fn empty() -> Self {
@@ -281,9 +275,9 @@ impl AnalyzedFunctionAttributes {
 fn live_prop_test_item_trait(
   mut item_trait: ItemTrait,
   captured_attributes: Vec<LivePropTestAttribute>,
-) -> Result<TokenStream, TokenStream> {
+) -> TokenStream {
   let _live_prop_test_attributes =
-    take_live_prop_test_attributes(&mut item_trait.attrs, captured_attributes)?;
+    take_live_prop_test_attributes(&mut item_trait.attrs, captured_attributes);
 
   // TODO require no arguments
 
@@ -295,14 +289,14 @@ fn live_prop_test_item_trait(
     match item {
       TraitItem::Method(mut method) => {
         let live_prop_test_attributes =
-          take_live_prop_test_attributes(&mut method.attrs, Vec::new())?;
+          take_live_prop_test_attributes(&mut method.attrs, Vec::new());
 
-        let analyzed_signature = AnalyzedSignature::new(&method.sig)?;
+        let analyzed_signature = AnalyzedSignature::new(&method.sig);
         let mut analyzed_attributes = AnalyzedFunctionAttributes::new(
           &live_prop_test_attributes,
           quote!($__LIVE_PROP_TEST_HISTORIES),
           &analyzed_signature.mutable_reference_parameter_names,
-        )?;
+        );
         let parameter_names = &analyzed_signature.all_parameter_names;
         const SELF_REPLACEMENT: &str = "__live_prop_test_self_macro_parameter";
 
@@ -314,9 +308,9 @@ fn live_prop_test_item_trait(
             } else {
               name
             })
-            .map_err(|e| e.to_compile_error())
+            .unwrap_or_abort()
           })
-          .collect::<Result<_, _>>()?;
+          .collect();
         let method_name = &method.sig.ident;
 
         for statement in analyzed_attributes
@@ -362,7 +356,7 @@ fn live_prop_test_item_trait(
             // delegate to the trait tests, same as any other impl
             AnalyzedFunctionAttributes::empty(),
             Some(&parse_quote!(#trait_name)),
-          )?;
+          );
           for method in replacement {
             new_items.push(TraitItem::Method(method));
           }
@@ -384,30 +378,27 @@ fn live_prop_test_item_trait(
   );
 
   item_trait.items = new_items;
-  Ok(
-    quote! {
-      #item_trait
-      #[doc(hidden)]
-      pub mod #histories_module_name {
-        #(#test_histories_statics)*
-      }
-      #[doc(hidden)]
-      #[macro_export]
-      macro_rules! #trait_tests_macro_name {
-        #(#test_macro_arms) *
-      }
-
+  (quote! {
+    #item_trait
+    #[doc(hidden)]
+    pub mod #histories_module_name {
+      #(#test_histories_statics)*
     }
-    .into(),
-  )
+    #[doc(hidden)]
+    #[macro_export]
+    macro_rules! #trait_tests_macro_name {
+      #(#test_macro_arms) *
+    }
+  })
+  .into()
 }
 
 fn live_prop_test_item_impl(
   mut item_impl: ItemImpl,
   captured_attributes: Vec<LivePropTestAttribute>,
-) -> Result<TokenStream, TokenStream> {
+) -> TokenStream {
   let live_prop_test_attributes =
-    take_live_prop_test_attributes(&mut item_impl.attrs, captured_attributes)?;
+    take_live_prop_test_attributes(&mut item_impl.attrs, captured_attributes);
 
   let mut trait_path = None;
   for attribute in live_prop_test_attributes {
@@ -427,7 +418,7 @@ fn live_prop_test_item_impl(
               "it doesn't make sense to specify more than one trait_path on the same impl"
             )
           }
-          trait_path = Some(lit_str.parse().map_err(|e| e.to_compile_error())?);
+          trait_path = Some(lit_str.parse().unwrap_or_abort());
         }
       }
       if !valid {
@@ -449,7 +440,7 @@ fn live_prop_test_item_impl(
             .iter()
             .any(|attr| attr.path.is_ident("live_prop_test"))
         {
-          let replacement = live_prop_test_function(&method, Vec::new(), trait_path.as_ref())?;
+          let replacement = live_prop_test_function(&method, Vec::new(), trait_path.as_ref());
           for method in replacement {
             new_items.push(ImplItem::Method(method));
           }
@@ -463,12 +454,10 @@ fn live_prop_test_item_impl(
 
   item_impl.items = new_items;
 
-  Ok(
-    quote! {
-      #item_impl
-    }
-    .into(),
-  )
+  (quote! {
+    #item_impl
+  })
+  .into()
 }
 
 /*
@@ -481,7 +470,7 @@ fn live_prop_test_function(
   function: &ImplItemMethod,
   captured_attributes: Vec<LivePropTestAttribute>,
   trait_path: Option<&Path>,
-) -> Result<Vec<ImplItemMethod>, TokenStream> {
+) -> Vec<ImplItemMethod> {
   let ImplItemMethod {
     attrs,
     vis,
@@ -492,14 +481,14 @@ fn live_prop_test_function(
   } = function;
 
   let mut attrs = attrs.clone();
-  let live_prop_test_attributes = take_live_prop_test_attributes(&mut attrs, captured_attributes)?;
+  let live_prop_test_attributes = take_live_prop_test_attributes(&mut attrs, captured_attributes);
 
-  let analyzed_signature = AnalyzedSignature::new(sig)?;
+  let analyzed_signature = AnalyzedSignature::new(sig);
   let analyzed_attributes = AnalyzedFunctionAttributes::new(
     &live_prop_test_attributes,
     parse_quote!(__live_prop_test_histories),
     &analyzed_signature.mutable_reference_parameter_names,
-  )?;
+  );
   function_replacements(
     &attrs,
     Some(quote!(#vis #defaultness)),
@@ -517,7 +506,7 @@ fn function_replacements<T: Parse>(
   analyzed_signature: AnalyzedSignature,
   analyzed_attributes: AnalyzedFunctionAttributes,
   trait_path: Option<&Path>,
-) -> Result<Vec<T>, TokenStream> {
+) -> Vec<T> {
   let AnalyzedSignature {
     signature,
     display_meta_item,
@@ -568,8 +557,8 @@ fn function_replacements<T: Parse>(
         quote!(#(#module_segments::)*#trait_tests_histories_path_end);
       let parameter_names_adjusted: Vec<Path> = all_parameter_names
         .iter()
-        .map(|name| syn::parse_str(name).map_err(|e| e.to_compile_error()))
-        .collect::<Result<_, _>>()?;
+        .map(|name| syn::parse_str(name).unwrap_or_abort())
+        .collect();
       (
         Some(quote!(
           let __live_prop_test_trait_temporaries = #trait_tests_histories_path.with(|__live_prop_test_histories| {
@@ -585,7 +574,7 @@ fn function_replacements<T: Parse>(
     }
   };
 
-  Ok(vec![
+  vec![
     parse_quote!(
       #[cfg(not(debug_assertions))]
       // note: we can't just say #function because we do still need to purge any live_prop_test config attributes from the arguments
@@ -618,7 +607,7 @@ fn function_replacements<T: Parse>(
         })
       }
     ),
-  ])
+  ]
 }
 
 struct TestAttribute {
@@ -627,7 +616,7 @@ struct TestAttribute {
 }
 
 impl TestAttribute {
-  fn from_attr_arguments(arguments: &AttrArguments) -> Result<TestAttribute, TokenStream> {
+  fn from_attr_arguments(arguments: &AttrArguments) -> TestAttribute {
     let mut result = TestAttribute {
       preconditions: Vec::new(),
       postconditions: Vec::new(),
@@ -643,28 +632,27 @@ impl TestAttribute {
       {
         if path.is_ident("precondition") {
           valid = true;
-          result
-            .preconditions
-            .push(lit_str.parse().map_err(|e| e.to_compile_error())?);
+          result.preconditions.push(lit_str.parse().unwrap_or_abort());
         }
         if path.is_ident("postcondition") {
           valid = true;
           result
             .postconditions
-            .push(lit_str.parse().map_err(|e| e.to_compile_error())?);
+            .push(lit_str.parse().unwrap_or_abort());
         }
       }
       if !valid {
-        return Err(
-            quote_spanned! {argument.span()=> compile_error!(r#"unrecognized argument to #[live_prop_test(...)]; on a `fn` item, valid arguments are `precondition="expr"` and `postcondition="expr"`"#);}.into()
-          );
+        abort!(
+          argument.span(),
+          r#"unrecognized argument to #[live_prop_test(...)]; on a `fn` item, valid arguments are `precondition="expr"` and `postcondition="expr"`"#
+        )
       }
     }
 
-    Ok(result)
+    result
   }
 
-  fn bundle(self, mutable_reference_parameter_names: &[String]) -> Result<TestBundle, TokenStream> {
+  fn bundle(self, mutable_reference_parameter_names: &[String]) -> TestBundle {
     fn evaluate_and_record_failures(condition: Expr) -> Expr {
       parse_quote! (
         if let ::std::result::Result::Err(__live_prop_test_failure_message) = ::live_prop_test::LivePropTestResult::canonicalize(#condition) {
@@ -796,10 +784,10 @@ impl TestAttribute {
       }
     );
 
-    Ok(TestBundle {
+    TestBundle {
       setup_closure,
       finish_closure,
-    })
+    }
   }
 }
 
