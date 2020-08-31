@@ -2,8 +2,8 @@ extern crate proc_macro;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Group, Span, TokenTree};
-use proc_macro_error::{abort, abort_call_site, proc_macro_error, ResultExt};
-use quote::quote;
+use proc_macro_error::{abort, abort_call_site, proc_macro_error, set_dummy, ResultExt};
+use quote::{quote, ToTokens};
 use syn::parse::Parse;
 #[allow(unused_imports)]
 use syn::{
@@ -52,6 +52,16 @@ fn take_live_prop_test_attributes(
   attributes.retain(|attribute| !attribute.path.is_ident("live_prop_test"));
   captured
 }
+struct VisitDummy;
+impl VisitMut for VisitDummy {
+  fn visit_attribute_mut(&mut self, attribute: &mut Attribute) {
+    if attribute.path.is_ident("live_prop_test") {
+      // replace with no-op attribute
+      attribute.path = parse_quote!(cfg);
+      attribute.tokens = parse_quote!(all());
+    }
+  }
+}
 
 fn live_prop_test_impl(arguments: TokenStream, input: TokenStream) -> TokenStream {
   let arguments: AttrArguments = Punctuated::parse_terminated
@@ -63,11 +73,23 @@ fn live_prop_test_impl(arguments: TokenStream, input: TokenStream) -> TokenStrea
   }];
 
   if let Ok(function) = syn::parse::<ImplItemMethod>(input.clone()) {
+    let mut dummy = function.clone();
+    VisitDummy.visit_impl_item_method_mut(&mut dummy);
+    set_dummy(dummy.to_token_stream());
+
     let replacement = live_prop_test_function(&function, captured_attributes, None);
     (quote! {#(#replacement) *}).into()
   } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input.clone()) {
+    let mut dummy = item_impl.clone();
+    VisitDummy.visit_item_impl_mut(&mut dummy);
+    set_dummy(dummy.to_token_stream());
+
     live_prop_test_item_impl(item_impl, captured_attributes)
   } else if let Ok(item_trait) = syn::parse::<ItemTrait>(input) {
+    let mut dummy = item_trait.clone();
+    VisitDummy.visit_item_trait_mut(&mut dummy);
+    set_dummy(dummy.to_token_stream());
+
     live_prop_test_item_trait(item_trait, captured_attributes)
   } else {
     abort_call_site!("#[live_prop_test] can only be applied to a fn item, an impl item, or an argument in the signature of a fn that also has the attribute")
