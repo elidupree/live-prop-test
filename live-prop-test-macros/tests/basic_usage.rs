@@ -272,3 +272,13 @@ fn implementor_with_own_tests_fails_twice() {
   ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithOwnTestsAndParameter::<i32>::method_without_default();
 }
+
+#[live_prop_test]
+trait FancierTestedTrait<T: ::std::fmt::Debug> {
+  #[live_prop_test(postcondition = "false")]
+  fn generic_method<U: ::std::fmt::Debug>(&self, _b: U)
+  where
+    T: ::std::clone::Clone,
+  {
+  }
+}

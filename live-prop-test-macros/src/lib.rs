@@ -718,7 +718,7 @@ fn function_replacements<T: Parse>(
       impl_generics
         .params
         .push(parse_quote_spanned!(*default_span=>
-          __LivePropTestSelfType: #trait_name + ?::std::marker::Sized
+          __LivePropTestSelfType: #trait_name #trait_ty_generics + ?::std::marker::Sized
         ));
       let (impl_impl_generics, _impl_ty_generics, where_clause) = impl_generics.split_for_impl();
       (
