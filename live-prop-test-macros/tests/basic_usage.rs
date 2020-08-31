@@ -173,7 +173,7 @@ fn call_get_field_muts() {
   GenericStruct(5).get_field_mut();
 }
 
-/*#[live_prop_test]
+#[live_prop_test]
 trait TestedTrait {
   #[live_prop_test(postcondition = "false")]
   fn method_with_default() {}
@@ -186,13 +186,14 @@ trait TestedTrait {
   fn untested_method();
 }
 struct ImplementorWithoutAttribute;
+#[live_prop_test]
 impl TestedTrait for ImplementorWithoutAttribute {
   fn method_without_default() {}
   fn self_method_without_default(&self, _b: i32) {}
   fn untested_method() {}
 }
 struct ImplementorWithAttribute;
-#[live_prop_test(trait_path = "crate::TestedTrait")]
+#[live_prop_test(use_trait_tests)]
 impl TestedTrait for ImplementorWithAttribute {
   fn method_without_default() {}
   fn self_method_without_default(&self, _b: i32) {}
@@ -248,4 +249,3 @@ fn implementor_with_attribute_fails_default_self() {
   ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithAttribute.self_method_with_default(5);
 }
-*/

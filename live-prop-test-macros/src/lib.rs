@@ -17,7 +17,7 @@ use syn::{
   ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Path, ReturnType, Signature,
   Stmt, Token, TraitItem, TraitItemMethod, Type,
 };
-use syn::{Block, Index, ItemConst};
+use syn::{Block, Index, ItemConst, PatType};
 
 /// caveat about Self and generic parameters of the containing impl
 #[proc_macro_error]
@@ -35,6 +35,13 @@ macro_rules! parse_quote_spanned {
       Ok(t) => t,
       Err(err) => panic!("{}", err),
     }
+  };
+}
+
+#[allow(unused_macros)]
+macro_rules! debug_quote {
+  ($($tt:tt)*) => {
+    eprintln!("{}", quote!($($tt)*).to_string())
   };
 }
 
@@ -67,7 +74,7 @@ impl VisitMut for VisitDummy {
     if attribute.path.is_ident("live_prop_test") {
       // replace with no-op attribute
       attribute.path = parse_quote!(cfg);
-      attribute.tokens = parse_quote!(all());
+      attribute.tokens = parse_quote!((all()));
     }
   }
 }
@@ -86,7 +93,8 @@ fn live_prop_test_impl(arguments: TokenStream, input: TokenStream) -> TokenStrea
     VisitDummy.visit_impl_item_method_mut(&mut dummy);
     set_dummy(dummy.to_token_stream());
 
-    let replacement = live_prop_test_function(&function, captured_attributes, None);
+    let replacement =
+      live_prop_test_function(&function, captured_attributes, ContainingImpl::None, false);
     (quote! {#(#replacement) *}).into()
   } else if let Ok(item_impl) = syn::parse::<ItemImpl>(input.clone()) {
     let mut dummy = item_impl.clone();
@@ -168,8 +176,8 @@ fn analyzed_parameters<'a>(
 struct AnalyzedSignature<'a> {
   signature: &'a Signature,
   display_meta_item: ItemConst,
-  start_setup: Stmt,
-  finish_setup: Stmt,
+  start_setup: proc_macro2::TokenStream,
+  finish_setup: proc_macro2::TokenStream,
   finish: Stmt,
   //return_type: Type,
   parameter_name_exprs: Vec<Expr>,
@@ -220,32 +228,37 @@ impl<'a> AnalyzedSignature<'a> {
     AnalyzedSignature {
       signature,
       display_meta_item: parse_quote_spanned!(default_span=>
-              const __LIVE_PROP_TEST_DISPLAY_META: ::live_prop_test::TestFunctionDisplayMeta = ::live_prop_test::TestFunctionDisplayMeta {
-                module_path: ::std::module_path!(),
-                name: ::std::stringify! (#function_name),
-                parameters: & [#(
-                  ::live_prop_test::TestArgumentDisplayMeta {
-                    name: ::std::stringify!(#parameter_name_exprs),
-                    prefix: #parameter_regression_prefixes,
-                  }
-                ),*],
-              };
+        const __LIVE_PROP_TEST_DISPLAY_META: ::live_prop_test::TestFunctionDisplayMeta = ::live_prop_test::TestFunctionDisplayMeta {
+          module_path: ::std::module_path!(),
+          name: ::std::stringify! (#function_name),
+          parameters: & [#(
+            ::live_prop_test::TestArgumentDisplayMeta {
+              name: ::std::stringify!(#parameter_name_exprs),
+              prefix: #parameter_regression_prefixes,
+            }
+          ),*],
+        };
       ),
-      start_setup: parse_quote_spanned!(default_span=> let mut __live_prop_test_setup = ::live_prop_test::TestsSetup::new();),
+      start_setup: parse_quote_spanned!(default_span=>
+        let mut __live_prop_test_setup = ::live_prop_test::TestsSetup::new();
+        let mut __live_prop_test_parameter_value_representations = ::std::option::Option::None;
+      ),
       finish_setup: parse_quote_spanned!(default_span=>
-      let mut __live_prop_test_finisher = __live_prop_test_setup.finish_setup (
-        __LIVE_PROP_TEST_DISPLAY_META,
-        || {
-          #[allow(unused_imports)]
-          use ::live_prop_test::NoDebugFallback;
-          let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_name_exprs).__live_prop_test_represent()),*];
-          parameter_value_representations
-        }
-      );
+        let (mut __live_prop_test_finisher, __live_prop_test_parameter_value_representations_temp) = __live_prop_test_setup.finish_setup (
+          __LIVE_PROP_TEST_DISPLAY_META,
+          || {
+            #[allow(unused_imports)]
+            use ::live_prop_test::NoDebugFallback;
+            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_name_exprs).__live_prop_test_represent()),*];
+            parameter_value_representations
+          }
+        );
+        __live_prop_test_parameter_value_representations = __live_prop_test_parameter_value_representations_temp;
       ),
       //return_type,
       finish: parse_quote_spanned!(default_span=>
-        __live_prop_test_finisher.finish(__LIVE_PROP_TEST_DISPLAY_META);),
+        __live_prop_test_finisher.finish(__LIVE_PROP_TEST_DISPLAY_META, &__live_prop_test_parameter_value_representations);
+      ),
       parameter_name_exprs,
       //all_parameter_names,
       mutable_reference_parameter_names,
@@ -264,7 +277,6 @@ impl AnalyzedFunctionAttributes {
   fn new(
     default_span: Span,
     live_prop_test_attributes: &[LivePropTestAttribute],
-    histories_path: proc_macro2::TokenStream,
     mutable_reference_parameter_names: &[String],
   ) -> Self {
     let default_span = live_prop_test_attributes
@@ -292,7 +304,7 @@ impl AnalyzedFunctionAttributes {
         span: default_span,
       };
       bundle.finalize(
-        quote_spanned!(default_span=> &#histories_path[#index]),
+        quote_spanned!(default_span=> &__live_prop_test_histories[#index]),
         quote_spanned!(default_span=> __live_prop_test_temporaries.#index),
       )
     }) {
@@ -319,7 +331,7 @@ impl AnalyzedFunctionAttributes {
       default_span: Span::call_site(),
       setup_expressions: Vec::new(),
       finish_statements: Vec::new(),
-      histories_declaration: parse_quote!("never_used!()"),
+      histories_declaration: parse_quote!(__live_prop_test_never_used!();),
     }
   }
 
@@ -328,6 +340,11 @@ impl AnalyzedFunctionAttributes {
   }
 }
 
+enum ContainingImpl<'a> {
+  None,
+  Impl(&'a ItemImpl),
+  Trait(&'a ItemTrait),
+}
 fn live_prop_test_item_trait(
   mut item_trait: ItemTrait,
   captured_attributes: Vec<LivePropTestAttribute>,
@@ -338,7 +355,6 @@ fn live_prop_test_item_trait(
   // TODO require no arguments
 
   let mut new_items = Vec::with_capacity(item_trait.items.len());
-  let trait_name = &item_trait.ident;
   for item in std::mem::take(&mut item_trait.items) {
     match item {
       TraitItem::Method(mut method) => {
@@ -352,11 +368,9 @@ fn live_prop_test_item_trait(
           mutable_reference_parameter_names,
           ..
         } = &analyzed_signature;
-
         let analyzed_attributes = AnalyzedFunctionAttributes::new(
           Span::call_site(),
           &live_prop_test_attributes,
-          quote!($__LIVE_PROP_TEST_HISTORIES),
           &mutable_reference_parameter_names,
         );
 
@@ -367,24 +381,73 @@ fn live_prop_test_item_trait(
           histories_declaration,
         } = &analyzed_attributes;
 
-        let test_signature = Signature {
+        let mut test_signature = Signature {
           ident: format_ident!("__live_prop_test_{}", signature.ident),
           ..(*signature).clone()
         };
-        new_items.push(parse_quote_spanned!(*default_span =>
+
+        let (arrow, original_return_type) = match &signature.output {
+          ReturnType::Default => (
+            parse_quote_spanned!(*default_span=> ->),
+            parse_quote_spanned!(*default_span=> ()),
+          ),
+          ReturnType::Type(arrow, ty) => (*arrow, (*ty).clone()),
+        };
+
+        test_signature
+          .inputs
+          .push(parse_quote_spanned!(*default_span=>
+            mut __live_prop_test_setup: ::live_prop_test::TestsSetup
+          ));
+        let mut callback_argument_types: Vec<Type> = signature
+          .inputs
+          .iter()
+          .map(|input| match input {
+            FnArg::Receiver(receiver) => {
+              if receiver.reference.is_some() {
+                if receiver.mutability.is_some() {
+                  parse_quote_spanned!(*default_span=> &mut Self)
+                } else {
+                  parse_quote_spanned!(*default_span=> & Self)
+                }
+              } else {
+                parse_quote_spanned!(*default_span=> Self)
+              }
+            }
+            FnArg::Typed(PatType { ty, .. }) => (**ty).clone(),
+          })
+          .collect();
+        callback_argument_types.push(parse_quote_spanned!(*default_span=>
+          ::live_prop_test::TestsSetup
+        ));
+        let callback_return = ReturnType::Type(
+          arrow,
+          Box::new(parse_quote_spanned!(*default_span=>
+            (#original_return_type, ::live_prop_test::TestsFinisher)
+          )),
+        );
+        test_signature
+          .inputs
+          .push(parse_quote_spanned!(*default_span=>
+            __live_prop_test_callback: impl ::std::ops::FnOnce(#(#callback_argument_types,)*) #callback_return
+          ));
+        test_signature.output = callback_return.clone();
+        new_items.push(parse_quote_spanned!(*default_span=>
           #test_signature {
             #histories_declaration
             __LIVE_PROP_TEST_HISTORIES.with(move |__live_prop_test_histories| {
               let __live_prop_test_temporaries = (#(#setup_expressions,)*);
 
-              let (result, __live_prop_test_finisher) = __live_prop_test_callback(#(#parameter_name_exprs,)*, __live_prop_test_setup);
+              let (result, mut __live_prop_test_finisher) = (__live_prop_test_callback)(
+                #(#parameter_name_exprs,)*
+                __live_prop_test_setup,
+              );
 
               #(#finish_statements) *
               (result, __live_prop_test_finisher)
             })
           }
         ));
-
         if analyzed_attributes.is_empty() {
           new_items.push(TraitItem::Method(method));
         } else if let Some(default) = method.default.as_ref() {
@@ -396,14 +459,15 @@ fn live_prop_test_item_trait(
             // Don't apply the test bundles like they were independent tests for a normal function;
             // delegate to the trait tests, same as any other impl
             AnalyzedFunctionAttributes::empty(),
-            Some(&parse_quote!(#trait_name)),
+            ContainingImpl::Trait(&item_trait),
+            true,
           );
           for method in replacement {
             new_items.push(TraitItem::Method(method));
           }
         } else {
           new_items.push(TraitItem::Method(method));
-        }
+        };
       }
       _ => new_items.push(item.clone()),
     }
@@ -417,39 +481,27 @@ fn live_prop_test_item_impl(
   mut item_impl: ItemImpl,
   captured_attributes: Vec<LivePropTestAttribute>,
 ) -> TokenStream {
-  let _live_prop_test_attributes =
+  let live_prop_test_attributes =
     take_live_prop_test_attributes(&mut item_impl.attrs, captured_attributes);
 
-  let use_trait_tests = false;
-  // let mut trait_path = None;
-  // for attribute in live_prop_test_attributes {
-  //   for argument in attribute.arguments {
-  //     let mut valid = false;
-  //     if let NestedMeta::Meta(Meta::NameValue(MetaNameValue {
-  //       path,
-  //       lit: Lit::Str(lit_str),
-  //       ..
-  //     })) = &argument
-  //     {
-  //       if path.is_ident("trait_path") {
-  //         valid = true;
-  //         if trait_path.is_some() {
-  //           abort!(
-  //             argument.span(),
-  //             "it doesn't make sense to specify more than one trait_path on the same impl"
-  //           )
-  //         }
-  //         trait_path = Some(lit_str.parse().unwrap_or_abort());
-  //       }
-  //     }
-  //     if !valid {
-  //       abort!(
-  //         argument.span(),
-  //         r#"unrecognized argument to #[live_prop_test(...)]; on an `impl` item, valid arguments are `trait_path="path"`"#
-  //       )
-  //     }
-  //   }
-  // }
+  let mut use_trait_tests = false;
+  for attribute in live_prop_test_attributes {
+    for argument in attribute.arguments {
+      let mut valid = false;
+      if let NestedMeta::Meta(Meta::Path(path)) = &argument {
+        if path.is_ident("use_trait_tests") {
+          valid = true;
+          use_trait_tests = true;
+        }
+      }
+      if !valid {
+        abort!(
+          argument.span(),
+          r#"unrecognized argument to #[live_prop_test(...)]; on an `impl` item, valid arguments are `use_trait_tests`"#
+        )
+      }
+    }
+  }
 
   let mut new_items = Vec::with_capacity(item_impl.items.len());
   for item in std::mem::take(&mut item_impl.items) {
@@ -461,7 +513,12 @@ fn live_prop_test_item_impl(
             .iter()
             .any(|attr| attr.path.is_ident("live_prop_test"))
         {
-          let replacement = live_prop_test_function(&method, Vec::new(), Some(&item_impl));
+          let replacement = live_prop_test_function(
+            &method,
+            Vec::new(),
+            ContainingImpl::Impl(&item_impl),
+            use_trait_tests,
+          );
           for method in replacement {
             new_items.push(ImplItem::Method(method));
           }
@@ -481,7 +538,8 @@ fn live_prop_test_item_impl(
 fn live_prop_test_function(
   function: &ImplItemMethod,
   captured_attributes: Vec<LivePropTestAttribute>,
-  containing_impl: Option<&ItemImpl>,
+  containing_impl: ContainingImpl,
+  use_trait_tests: bool,
 ) -> Vec<ImplItemMethod> {
   let ImplItemMethod {
     attrs,
@@ -502,7 +560,6 @@ fn live_prop_test_function(
   let analyzed_attributes = AnalyzedFunctionAttributes::new(
     default_span,
     &live_prop_test_attributes,
-    parse_quote_spanned!(default_span=> __live_prop_test_histories),
     &analyzed_signature.mutable_reference_parameter_names,
   );
   function_replacements(
@@ -512,6 +569,7 @@ fn live_prop_test_function(
     analyzed_signature,
     analyzed_attributes,
     containing_impl,
+    use_trait_tests,
   )
 }
 
@@ -521,7 +579,8 @@ fn function_replacements<T: Parse>(
   block: &Block,
   analyzed_signature: AnalyzedSignature,
   analyzed_attributes: AnalyzedFunctionAttributes,
-  containing_impl: Option<&ItemImpl>,
+  containing_impl: ContainingImpl,
+  use_trait_tests: bool,
 ) -> Vec<T> {
   let AnalyzedSignature {
     signature,
@@ -540,8 +599,7 @@ fn function_replacements<T: Parse>(
     setup_expressions,
     finish_statements,
     histories_declaration,
-  } = analyzed_attributes;
-
+  } = &analyzed_attributes;
   // let (trait_setup, trait_finish) = match trait_path {
   //   None => (None, None),
   //   Some(trait_path) => {
@@ -585,13 +643,12 @@ fn function_replacements<T: Parse>(
   //   }
   // };
 
-  if containing_impl.is_none() {
+  if let ContainingImpl::None = containing_impl {
     // TODO: also catch `Self`
     if let Some(receiver) = signature.receiver() {
       abort!(receiver.span(), "when using live-prop-test on methods with a `self` parameter, you must also put the #[live_prop_test] attribute on the containing impl")
     }
-  }
-
+  };
   let inner_function_signature = Signature {
     ident: format_ident!("__live_prop_test_original_function_for_{}", signature.ident),
     ..signature.clone()
@@ -606,15 +663,14 @@ fn function_replacements<T: Parse>(
     #vis_defaultness #inner_function_signature
     #block
   };
-
   let (inner_function_definition, inner_function_call_syntax) = match containing_impl {
-    None => (inner_function_definition, quote!(#inner_function_name)),
-    Some(containing_impl) => {
+    ContainingImpl::None => (inner_function_definition, quote!(#inner_function_name)),
+    ContainingImpl::Impl(containing_impl) => {
       let self_ty = &containing_impl.self_ty;
       let (impl_generics, ty_generics, where_clause) = containing_impl.generics.split_for_impl();
 
       (
-        quote_spanned! {default_span=>
+        quote_spanned! {*default_span=>
           trait __LivePropTestOriginalFunctionExt #impl_generics #where_clause {
             #inner_function_signature;
           }
@@ -622,16 +678,96 @@ fn function_replacements<T: Parse>(
             #inner_function_definition
           }
         },
-        quote_spanned!(default_span=> <#self_ty as __LivePropTestOriginalFunctionExt #ty_generics>::#inner_function_name),
+        quote_spanned!(*default_span=> <#self_ty as __LivePropTestOriginalFunctionExt #ty_generics>::#inner_function_name),
+      )
+    }
+    ContainingImpl::Trait(containing_trait) => {
+      let trait_name = &containing_trait.ident;
+      let (trait_impl_generics, trait_ty_generics, _where_clause) =
+        containing_trait.generics.split_for_impl();
+      let mut impl_generics = containing_trait.generics.clone();
+      impl_generics
+        .params
+        .push(parse_quote_spanned!(*default_span=>
+          __LivePropTestSelfType: #trait_name + ?::std::marker::Sized
+        ));
+      let (impl_impl_generics, _impl_ty_generics, where_clause) = impl_generics.split_for_impl();
+      (
+        quote_spanned! {*default_span=>
+          trait __LivePropTestOriginalFunctionExt #trait_impl_generics #where_clause {
+            #inner_function_signature;
+          }
+          impl #impl_impl_generics __LivePropTestOriginalFunctionExt #trait_ty_generics for __LivePropTestSelfType #where_clause {
+            #inner_function_definition
+          }
+        },
+        quote_spanned!(*default_span=> <Self as __LivePropTestOriginalFunctionExt #trait_ty_generics>::#inner_function_name),
       )
     }
   };
 
   let (_impl_generics, ty_generics, _where_clause) = signature.generics.split_for_impl();
   let turbofish = ty_generics.as_turbofish();
+  let finish_setup_and_call_inner = match use_trait_tests {
+    false => quote_spanned!(*default_span=>
+      #finish_setup
+      let result = #inner_function_call_syntax #turbofish(#(#parameter_name_exprs,)*);
+    ),
+    true => {
+      let test_method = format_ident!("__live_prop_test_{}", signature.ident);
+      let parameter_placeholders: Vec<_> = parameter_name_exprs
+        .iter()
+        .enumerate()
+        .map(|(index, expr)| {
+          Ident::new(
+            &format!("__live_prop_test_parameter_{}", index),
+            expr.span(),
+          )
+        })
+        .collect();
+      quote_spanned!(*default_span=>
+        let (result, mut __live_prop_test_finisher) = Self::#test_method(
+          #(#parameter_name_exprs,)*
+          __live_prop_test_setup,
+          |#(#parameter_placeholders,)* __live_prop_test_setup| {
+            #finish_setup
+            (
+              #inner_function_call_syntax #turbofish(#(#parameter_placeholders,)*),
+              __live_prop_test_finisher
+            )
+          }
+        );
+      )
+    }
+  };
 
-  vec![
-    parse_quote_spanned!(default_span=>
+  let test_body = match analyzed_attributes.is_empty() {
+    true => quote_spanned!(*default_span=>
+      #start_setup
+      #finish_setup_and_call_inner
+      #finish
+
+      result
+    ),
+    false => quote_spanned!(*default_span=>
+      #histories_declaration
+      #start_setup
+      __LIVE_PROP_TEST_HISTORIES.with(move |__live_prop_test_histories| {
+        let __live_prop_test_temporaries = (#(#setup_expressions,)*);
+        // #trait_setup
+
+        #finish_setup_and_call_inner
+
+        #(#finish_statements) *
+        // #trait_finish
+        #finish
+
+        result
+      })
+    ),
+  };
+  let result = vec![
+    parse_quote_spanned!(*default_span=>
       #[cfg(not(debug_assertions))]
       // note: we can't just say #function because we do still need to purge any live_prop_test config attributes from the arguments
       #(#non_lpt_attributes) *
@@ -639,32 +775,18 @@ fn function_replacements<T: Parse>(
       #block
 
     ),
-    parse_quote_spanned!(default_span=>
+    parse_quote_spanned!(*default_span=>
       #[cfg(debug_assertions)]
       #(#non_lpt_attributes) *
       #vis_defaultness #signature
       {
         #inner_function_definition
-        #histories_declaration
         #display_meta_item
-
-        #start_setup
-        __LIVE_PROP_TEST_HISTORIES.with(move |__live_prop_test_histories| {
-          let __live_prop_test_temporaries = (#(#setup_expressions,)*);
-          // #trait_setup
-          #finish_setup
-
-          let result = #inner_function_call_syntax #turbofish(#(#parameter_name_exprs,)*);
-
-          #(#finish_statements) *
-          // #trait_finish
-          #finish
-
-          result
-        })
+        #test_body
       }
     ),
-  ]
+  ];
+  result
 }
 
 struct TestAttribute {

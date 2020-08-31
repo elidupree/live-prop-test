@@ -245,8 +245,8 @@ pub struct TestFailure {
 }
 
 #[derive(Debug)]
-pub struct TestsFinisher<A> {
-  shared_setup_data: Option<(A, Duration)>,
+pub struct TestsFinisher {
+  shared_setup_time_taken: Option<Duration>,
   failures: Vec<TestFailure>,
 }
 
@@ -308,11 +308,11 @@ impl TestsSetup {
     self,
     function_display_meta: TestFunctionDisplayMeta,
     make_parameter_value_representations: impl FnOnce() -> A,
-  ) -> TestsFinisher<A>
+  ) -> (TestsFinisher, Option<A>)
   where
     for<'a> &'a A: IntoIterator<Item = &'a String>,
   {
-    let shared_setup_data = if self.any_tests_running {
+    let (shared_setup_time_taken, parameter_value_representations) = if self.any_tests_running {
       let start_time = throttling_internals::thread_time();
       let parameter_value_representations = (make_parameter_value_representations)();
       announce_failures(
@@ -321,18 +321,21 @@ impl TestsSetup {
         &self.failures,
         "postcondition",
       );
-      Some((
-        parameter_value_representations,
-        throttling_internals::thread_time() - start_time,
-      ))
+      (
+        Some(throttling_internals::thread_time() - start_time),
+        Some(parameter_value_representations),
+      )
     } else {
-      None
+      (None, None)
     };
 
-    TestsFinisher {
-      shared_setup_data,
-      failures: Vec::new(),
-    }
+    (
+      TestsFinisher {
+        shared_setup_time_taken,
+        failures: Vec::new(),
+      },
+      parameter_value_representations,
+    )
   }
 }
 
@@ -342,19 +345,14 @@ impl<'a> TestFailuresCollector<'a> {
   }
 }
 
-impl<A> TestsFinisher<A>
-where
-  for<'a> &'a A: IntoIterator<Item = &'a String>,
-{
+impl TestsFinisher {
   pub fn finish_test<T>(
     &mut self,
     history: &TestHistory,
     temporaries: TestTemporaries<T>,
     finish: impl FnOnce(T, &mut TestFailuresCollector),
   ) {
-    if let Some((_parameter_value_representations, shared_setup_time_taken)) =
-      &self.shared_setup_data
-    {
+    if let Some(shared_setup_time_taken) = &self.shared_setup_time_taken {
       if let Some(TestTemporariesInner {
         setup_data,
         setup_time_taken,
@@ -380,10 +378,14 @@ where
     }
   }
 
-  pub fn finish(self, function_display_meta: TestFunctionDisplayMeta) {
-    if let Some((parameter_value_representations, _shared_setup_time_taken)) =
-      &self.shared_setup_data
-    {
+  pub fn finish<A>(
+    self,
+    function_display_meta: TestFunctionDisplayMeta,
+    parameter_value_representations: &Option<A>,
+  ) where
+    for<'a> &'a A: IntoIterator<Item = &'a String>,
+  {
+    if let Some(parameter_value_representations) = parameter_value_representations {
       announce_failures(
         function_display_meta,
         parameter_value_representations,
