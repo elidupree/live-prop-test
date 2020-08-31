@@ -1,9 +1,11 @@
 error: #[live_prop_test] can only be applied to a fn item, impl item, or trait item
+
+  = help: if it looks like it's already applied to one of those things, maybe there's a syntax error in the body? live_prop_test can only recognize what it is if it's syntactically valid.
+  = help: try commenting out the #[live_prop_test] attribute to make it easier to find the syntax error.
+
  --> $DIR/not_fn.rs:3:1
   |
 3 | #[live_prop_test]
   | ^^^^^^^^^^^^^^^^^
   |
-  = help: if it looks like it's already applied to one of those things, maybe there's a syntax error in the body? live_prop_test can only recognize what it is if it's syntactically valid.
-  = help: try commenting out the #[live_prop_test] attribute to make it easier to find the syntax error.
   = note: this error originates in an attribute macro (in Nightly builds, run with -Z macro-backtrace for more info)
