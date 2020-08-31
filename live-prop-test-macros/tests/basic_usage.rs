@@ -202,6 +202,20 @@ impl TestedTrait for ImplementorWithAttribute {
   fn untested_method() {}
 }
 
+struct ImplementorWithOwnTestsAndParameter<T>(::std::marker::PhantomData<T>);
+#[live_prop_test(use_trait_tests)]
+impl<T: ::std::clone::Clone> TestedTrait for ImplementorWithOwnTestsAndParameter<T>
+where
+  T: ::std::fmt::Debug,
+{
+  #[live_prop_test(postcondition = "false")]
+  fn method_without_default() {}
+  #[live_prop_test(postcondition = "false")]
+  fn self_method_without_default(&self, _b: i32) {}
+  #[live_prop_test(postcondition = "false")]
+  fn untested_method() {}
+}
+
 #[test]
 fn implementor_without_attribute_passes_non_default() {
   ::live_prop_test::initialize_for_internal_tests();
@@ -250,4 +264,11 @@ fn implementor_with_attribute_fails_default() {
 fn implementor_with_attribute_fails_default_self() {
   ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithAttribute.self_method_with_default(5);
+}
+
+#[test]
+#[should_panic(expected = "2 postconditions")]
+fn implementor_with_own_tests_fails_twice() {
+  ::live_prop_test::initialize_for_internal_tests();
+  ImplementorWithOwnTestsAndParameter::<i32>::method_without_default();
 }

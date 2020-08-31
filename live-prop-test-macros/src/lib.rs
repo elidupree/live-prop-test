@@ -515,6 +515,12 @@ fn live_prop_test_item_impl(
         if path.is_ident("use_trait_tests") {
           valid = true;
           use_trait_tests = true;
+          if item_impl.trait_.is_none() {
+            abort!(
+              argument.span(),
+              "can't `use_trait_tests` on an impl that is not a trait impl"
+            )
+          }
         }
       }
       if !valid {
@@ -554,7 +560,6 @@ fn live_prop_test_item_impl(
   }
 
   item_impl.items = new_items;
-
   item_impl.to_token_stream().into()
 }
 
@@ -792,7 +797,6 @@ fn function_replacements<T: Parse>(
       #(#non_lpt_attributes) *
       #vis_defaultness #signature
       #block
-
     ),
     parse_quote_spanned!(*default_span=>
       #[cfg(debug_assertions)]
