@@ -92,7 +92,11 @@ fn live_prop_test_impl(arguments: TokenStream, input: TokenStream) -> TokenStrea
 
     live_prop_test_item_trait(item_trait, captured_attributes)
   } else {
-    abort_call_site!("#[live_prop_test] can only be applied to a fn item, an impl item, or an argument in the signature of a fn that also has the attribute")
+    abort_call_site!(
+      "#[live_prop_test] can only be applied to a fn item, impl item, or trait item";
+      help = "if it looks like it's already applied to one of those things, maybe there's a syntax error in the body? live_prop_test can only recognize what it is if it's syntactically valid.";
+      help = "try commenting out the #[live_prop_test] attribute to make it easier to find the syntax error.";
+    )
   }
 }
 
