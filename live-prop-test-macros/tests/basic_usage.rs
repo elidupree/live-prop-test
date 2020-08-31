@@ -183,6 +183,8 @@ trait TestedTrait {
   fn self_method_with_default(&self, _b: i32) {}
   #[live_prop_test(postcondition = "false")]
   fn self_method_without_default(&self, _b: i32);
+  #[live_prop_test(postcondition = "false")]
+  fn generic_method<T>(&self, _b: T) {}
   fn untested_method();
 }
 struct ImplementorWithoutAttribute;

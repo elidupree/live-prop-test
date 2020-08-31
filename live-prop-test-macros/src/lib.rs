@@ -174,15 +174,17 @@ fn analyzed_parameters<'a>(
 }
 
 struct AnalyzedSignature<'a> {
+  default_span: Span,
+  num_parameters: usize,
   signature: &'a Signature,
   display_meta_item: ItemConst,
   start_setup: proc_macro2::TokenStream,
-  finish_setup: proc_macro2::TokenStream,
   finish: Stmt,
   //return_type: Type,
   parameter_name_exprs: Vec<Expr>,
   //all_parameter_names: Vec<String>,
   mutable_reference_parameter_names: Vec<String>,
+  parameter_placeholder_idents: Vec<Ident>,
 }
 impl<'a> AnalyzedSignature<'a> {
   fn new(signature: &'a Signature) -> Self {
@@ -218,6 +220,16 @@ impl<'a> AnalyzedSignature<'a> {
       .map(|a| a.name_string.clone())
       .collect();
     //let all_parameter_names = analyzed.iter().map(|a| a.name_string.clone()).collect();
+    let parameter_placeholder_idents: Vec<_> = parameter_name_exprs
+      .iter()
+      .enumerate()
+      .map(|(index, expr)| {
+        Ident::new(
+          &format!("__live_prop_test_parameter_{}", index),
+          expr.span(),
+        )
+      })
+      .collect();
 
     let default_span = signature.span();
     // let return_type: Type = match return_type {
@@ -243,18 +255,7 @@ impl<'a> AnalyzedSignature<'a> {
         let mut __live_prop_test_setup = ::live_prop_test::TestsSetup::new();
         let mut __live_prop_test_parameter_value_representations = ::std::option::Option::None;
       ),
-      finish_setup: parse_quote_spanned!(default_span=>
-        let (mut __live_prop_test_finisher, __live_prop_test_parameter_value_representations_temp) = __live_prop_test_setup.finish_setup (
-          __LIVE_PROP_TEST_DISPLAY_META,
-          || {
-            #[allow(unused_imports)]
-            use ::live_prop_test::NoDebugFallback;
-            let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_name_exprs).__live_prop_test_represent()),*];
-            parameter_value_representations
-          }
-        );
-        __live_prop_test_parameter_value_representations = __live_prop_test_parameter_value_representations_temp;
-      ),
+
       //return_type,
       finish: parse_quote_spanned!(default_span=>
         __live_prop_test_finisher.finish(__LIVE_PROP_TEST_DISPLAY_META, &__live_prop_test_parameter_value_representations);
@@ -262,7 +263,29 @@ impl<'a> AnalyzedSignature<'a> {
       parameter_name_exprs,
       //all_parameter_names,
       mutable_reference_parameter_names,
+      parameter_placeholder_idents,
+      num_parameters,
+      default_span,
     }
+  }
+  fn finish_setup<Name: ToTokens>(&self, parameter_bindings: &[Name]) -> proc_macro2::TokenStream {
+    let AnalyzedSignature {
+      num_parameters,
+      default_span,
+      ..
+    } = self;
+    parse_quote_spanned!(*default_span=>
+      let (mut __live_prop_test_finisher, __live_prop_test_parameter_value_representations_temp) = __live_prop_test_setup.finish_setup (
+        __LIVE_PROP_TEST_DISPLAY_META,
+        || {
+          #[allow(unused_imports)]
+          use ::live_prop_test::NoDebugFallback;
+          let parameter_value_representations: [::std::string::String; #num_parameters] = [#(::live_prop_test::MaybeDebug(&#parameter_bindings).__live_prop_test_represent()),*];
+          parameter_value_representations
+        }
+      );
+      __live_prop_test_parameter_value_representations = __live_prop_test_parameter_value_representations_temp;
+    )
   }
 }
 
@@ -586,13 +609,14 @@ fn function_replacements<T: Parse>(
     signature,
     display_meta_item,
     start_setup,
-    finish_setup,
+    //finish_setup,
     finish,
     //return_type,
     parameter_name_exprs,
     //all_parameter_names,
+    parameter_placeholder_idents,
     ..
-  } = analyzed_signature;
+  } = &analyzed_signature;
 
   let AnalyzedFunctionAttributes {
     default_span,
@@ -651,7 +675,7 @@ fn function_replacements<T: Parse>(
   };
   let inner_function_signature = Signature {
     ident: format_ident!("__live_prop_test_original_function_for_{}", signature.ident),
-    ..signature.clone()
+    ..(*signature).clone()
   };
   let inner_function_name = &inner_function_signature.ident;
 
@@ -709,30 +733,25 @@ fn function_replacements<T: Parse>(
   let (_impl_generics, ty_generics, _where_clause) = signature.generics.split_for_impl();
   let turbofish = ty_generics.as_turbofish();
   let finish_setup_and_call_inner = match use_trait_tests {
-    false => quote_spanned!(*default_span=>
-      #finish_setup
-      let result = #inner_function_call_syntax #turbofish(#(#parameter_name_exprs,)*);
-    ),
+    false => {
+      let finish_setup = analyzed_signature.finish_setup(parameter_name_exprs);
+      quote_spanned!(*default_span=>
+        #finish_setup
+        let result = #inner_function_call_syntax #turbofish(#(#parameter_name_exprs,)*);
+      )
+    }
     true => {
       let test_method = format_ident!("__live_prop_test_{}", signature.ident);
-      let parameter_placeholders: Vec<_> = parameter_name_exprs
-        .iter()
-        .enumerate()
-        .map(|(index, expr)| {
-          Ident::new(
-            &format!("__live_prop_test_parameter_{}", index),
-            expr.span(),
-          )
-        })
-        .collect();
+      let finish_setup = analyzed_signature.finish_setup(parameter_placeholder_idents);
+
       quote_spanned!(*default_span=>
         let (result, mut __live_prop_test_finisher) = Self::#test_method(
           #(#parameter_name_exprs,)*
           __live_prop_test_setup,
-          |#(#parameter_placeholders,)* __live_prop_test_setup| {
+          |#(#parameter_placeholder_idents,)* __live_prop_test_setup| {
             #finish_setup
             (
-              #inner_function_call_syntax #turbofish(#(#parameter_placeholders,)*),
+              #inner_function_call_syntax #turbofish(#(#parameter_placeholder_idents,)*),
               __live_prop_test_finisher
             )
           }
