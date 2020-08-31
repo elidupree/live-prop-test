@@ -98,6 +98,11 @@ impl Fielded {
   fn exp2_field_wrong(&mut self) {
     self.field = 2 << self.field
   }
+
+  #[live_prop_test(postcondition = "self.field == old(self.field)")]
+  fn get_field_mut(&mut self) -> &mut i32 {
+    &mut self.field
+  }
 }
 
 trait Exp2Field {
