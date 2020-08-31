@@ -1,7 +1,7 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Group, Span, TokenTree};
+use proc_macro2::Span;
 use proc_macro_error::{abort, abort_call_site, proc_macro_error, set_dummy, ResultExt};
 use quote::{format_ident, quote, quote_spanned, ToTokens};
 use syn::parse::Parse;
@@ -173,7 +173,7 @@ struct AnalyzedSignature<'a> {
   finish: Stmt,
   //return_type: Type,
   parameter_name_exprs: Vec<Expr>,
-  all_parameter_names: Vec<String>,
+  //all_parameter_names: Vec<String>,
   mutable_reference_parameter_names: Vec<String>,
 }
 impl<'a> AnalyzedSignature<'a> {
@@ -209,7 +209,7 @@ impl<'a> AnalyzedSignature<'a> {
       .filter(|a| a.is_mutable_reference)
       .map(|a| a.name_string.clone())
       .collect();
-    let all_parameter_names = analyzed.iter().map(|a| a.name_string.clone()).collect();
+    //let all_parameter_names = analyzed.iter().map(|a| a.name_string.clone()).collect();
 
     let default_span = signature.span();
     // let return_type: Type = match return_type {
@@ -247,7 +247,7 @@ impl<'a> AnalyzedSignature<'a> {
       finish: parse_quote_spanned!(default_span=>
         __live_prop_test_finisher.finish(__LIVE_PROP_TEST_DISPLAY_META);),
       parameter_name_exprs,
-      all_parameter_names,
+      //all_parameter_names,
       mutable_reference_parameter_names,
     }
   }
@@ -257,6 +257,7 @@ struct AnalyzedFunctionAttributes {
   default_span: Span,
   setup_expressions: Vec<proc_macro2::TokenStream>,
   finish_statements: Vec<proc_macro2::TokenStream>,
+  histories_declaration: ItemMacro,
 }
 
 impl AnalyzedFunctionAttributes {
@@ -298,10 +299,18 @@ impl AnalyzedFunctionAttributes {
       setup_expressions.push(setup);
       finish_statements.push(finish);
     }
+
+    let num_bundles = setup_expressions.len();
+    let initializers =
+      (0..num_bundles).map(|_| quote_spanned!(default_span=> ::live_prop_test::TestHistory::new()));
+    let histories_declaration: ItemMacro = parse_quote_spanned!(default_span=> ::std::thread_local! {
+      static __LIVE_PROP_TEST_HISTORIES: [::live_prop_test::TestHistory; #num_bundles] = [#(#initializers,)*];
+    });
     AnalyzedFunctionAttributes {
       default_span,
       setup_expressions,
       finish_statements,
+      histories_declaration,
     }
   }
 
@@ -310,6 +319,7 @@ impl AnalyzedFunctionAttributes {
       default_span: Span::call_site(),
       setup_expressions: Vec::new(),
       finish_statements: Vec::new(),
+      histories_declaration: parse_quote!("never_used!()"),
     }
   }
 
@@ -328,8 +338,6 @@ fn live_prop_test_item_trait(
   // TODO require no arguments
 
   let mut new_items = Vec::with_capacity(item_trait.items.len());
-  let mut test_macro_arms = Vec::with_capacity(item_trait.items.len());
-  let mut test_histories_statics: Vec<ItemMacro> = Vec::with_capacity(item_trait.items.len());
   let trait_name = &item_trait.ident;
   for item in std::mem::take(&mut item_trait.items) {
     match item {
@@ -338,59 +346,45 @@ fn live_prop_test_item_trait(
           take_live_prop_test_attributes(&mut method.attrs, Vec::new());
 
         let analyzed_signature = AnalyzedSignature::new(&method.sig);
-        let mut analyzed_attributes = AnalyzedFunctionAttributes::new(
+        let AnalyzedSignature {
+          signature,
+          parameter_name_exprs,
+          mutable_reference_parameter_names,
+          ..
+        } = &analyzed_signature;
+
+        let analyzed_attributes = AnalyzedFunctionAttributes::new(
           Span::call_site(),
           &live_prop_test_attributes,
           quote!($__LIVE_PROP_TEST_HISTORIES),
-          &analyzed_signature.mutable_reference_parameter_names,
+          &mutable_reference_parameter_names,
         );
-        let parameter_names = &analyzed_signature.all_parameter_names;
-        const SELF_REPLACEMENT: &str = "__live_prop_test_self_macro_parameter";
 
-        let parameter_names_adjusted: Vec<Path> = parameter_names
-          .iter()
-          .map(|name| {
-            syn::parse_str(if name == "self" {
-              SELF_REPLACEMENT
-            } else {
-              name
+        let AnalyzedFunctionAttributes {
+          default_span,
+          setup_expressions,
+          finish_statements,
+          histories_declaration,
+        } = &analyzed_attributes;
+
+        let test_signature = Signature {
+          ident: format_ident!("__live_prop_test_{}", signature.ident),
+          ..(*signature).clone()
+        };
+        new_items.push(parse_quote_spanned!(*default_span =>
+          #test_signature {
+            #histories_declaration
+            __LIVE_PROP_TEST_HISTORIES.with(move |__live_prop_test_histories| {
+              let __live_prop_test_temporaries = (#(#setup_expressions,)*);
+
+              let (result, __live_prop_test_finisher) = __live_prop_test_callback(#(#parameter_name_exprs,)*, __live_prop_test_setup);
+
+              #(#finish_statements) *
+              (result, __live_prop_test_finisher)
             })
-            .unwrap_or_abort()
-          })
-          .collect();
-        let method_name = &method.sig.ident;
-
-        for statement in analyzed_attributes
-          .setup_expressions
-          .iter_mut()
-          .chain(&mut analyzed_attributes.finish_statements)
-        {
-          *statement = replace_idents(std::mem::take(statement), &mut |ident| {
-            if ident == "self" {
-              TokenTree::Ident(Ident::new(SELF_REPLACEMENT, Span::call_site()))
-            } else if parameter_names.iter().any(|name| ident == name) {
-              TokenTree::Ident(format_ident!("${}", ident))
-            } else {
-              TokenTree::Ident(ident)
-            }
-          });
-        }
-        let setup_expressions = &analyzed_attributes.setup_expressions;
-        let finish_statements = &analyzed_attributes.finish_statements;
-
-        test_macro_arms.push(quote!(
-            (#method_name setup $__live_prop_test_setup: tt $__LIVE_PROP_TEST_HISTORIES: tt #($#parameter_names_adjusted: tt)*) => {
-              {let __live_prop_test_setup = &mut $__live_prop_test_setup; (#(#setup_expressions,)*)}
-            };
-            (#method_name finish $__live_prop_test_finisher: tt $__LIVE_PROP_TEST_HISTORIES: tt $__live_prop_test_temporaries: tt #($#parameter_names_adjusted: tt)*) => {
-              {let __live_prop_test_finisher = &mut $__live_prop_test_finisher; #(#finish_statements) *}
-            };
+          }
         ));
-        let num_bundles = setup_expressions.len();
-        let initializers = (0..num_bundles).map(|_| quote!(::live_prop_test::TestHistory::new()));
-        test_histories_statics.push(parse_quote!(::std::thread_local! {
-          pub static #method_name: [::live_prop_test::TestHistory; #num_bundles] = [#(#initializers,)*];
-        }));
+
         if analyzed_attributes.is_empty() {
           new_items.push(TraitItem::Method(method));
         } else if let Some(default) = method.default.as_ref() {
@@ -415,24 +409,8 @@ fn live_prop_test_item_trait(
     }
   }
 
-  let trait_tests_macro_name =
-    format_ident!("__live_prop_test_trait_tests_for_{}", item_trait.ident);
-  let histories_module_name = format_ident!("__live_prop_test_histories_for_{}", item_trait.ident);
-
   item_trait.items = new_items;
-  (quote! {
-    #item_trait
-    #[doc(hidden)]
-    pub mod #histories_module_name {
-      #(#test_histories_statics)*
-    }
-    #[doc(hidden)]
-    #[macro_export]
-    macro_rules! #trait_tests_macro_name {
-      #(#test_macro_arms) *
-    }
-  })
-  .into()
+  item_trait.to_token_stream().into()
 }
 
 fn live_prop_test_item_impl(
@@ -561,13 +539,8 @@ fn function_replacements<T: Parse>(
     default_span,
     setup_expressions,
     finish_statements,
+    histories_declaration,
   } = analyzed_attributes;
-
-  let num_bundles = setup_expressions.len();
-  let initializers = (0..num_bundles).map(|_| quote!(::live_prop_test::TestHistory::new()));
-  let histories_declaration: ItemMacro = parse_quote!(::std::thread_local! {
-    static __LIVE_PROP_TEST_HISTORIES: [::live_prop_test::TestHistory; #num_bundles] = [#(#initializers,)*];
-  });
 
   // let (trait_setup, trait_finish) = match trait_path {
   //   None => (None, None),
@@ -908,19 +881,19 @@ impl TestBundle {
   }
 }
 
-fn replace_idents(
-  stream: proc_macro2::TokenStream,
-  replace: &mut impl FnMut(Ident) -> TokenTree,
-) -> proc_macro2::TokenStream {
-  stream
-    .into_iter()
-    .map(|tree| match tree {
-      TokenTree::Ident(ident) => replace(ident),
-      TokenTree::Group(group) => TokenTree::Group(Group::new(
-        group.delimiter(),
-        replace_idents(group.stream(), replace),
-      )),
-      _ => tree,
-    })
-    .collect()
-}
+// fn replace_idents(
+//   stream: proc_macro2::TokenStream,
+//   replace: &mut impl FnMut(Ident) -> TokenTree,
+// ) -> proc_macro2::TokenStream {
+//   stream
+//     .into_iter()
+//     .map(|tree| match tree {
+//       TokenTree::Ident(ident) => replace(ident),
+//       TokenTree::Group(group) => TokenTree::Group(Group::new(
+//         group.delimiter(),
+//         replace_idents(group.stream(), replace),
+//       )),
+//       _ => tree,
+//     })
+//     .collect()
+// }
