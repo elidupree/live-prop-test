@@ -3,7 +3,7 @@ extern crate proc_macro;
 use proc_macro::TokenStream;
 use proc_macro2::{Group, Span, TokenTree};
 use proc_macro_error::{abort, abort_call_site, proc_macro_error, set_dummy, ResultExt};
-use quote::{quote, ToTokens};
+use quote::{format_ident, quote, ToTokens};
 use syn::parse::Parse;
 #[allow(unused_imports)]
 use syn::{
@@ -348,7 +348,7 @@ fn live_prop_test_item_trait(
             if ident == "self" {
               TokenTree::Ident(Ident::new(SELF_REPLACEMENT, Span::call_site()))
             } else if parameter_names.iter().any(|name| ident == name) {
-              TokenTree::Ident(Ident::new(&format!("${}", ident), Span::call_site()))
+              TokenTree::Ident(format_ident!("${}", ident))
             } else {
               TokenTree::Ident(ident)
             }
@@ -394,14 +394,9 @@ fn live_prop_test_item_trait(
     }
   }
 
-  let trait_tests_macro_name = Ident::new(
-    &format!("__live_prop_test_trait_tests_for_{}", item_trait.ident),
-    Span::call_site(),
-  );
-  let histories_module_name = Ident::new(
-    &format!("__live_prop_test_histories_for_{}", item_trait.ident),
-    Span::call_site(),
-  );
+  let trait_tests_macro_name =
+    format_ident!("__live_prop_test_trait_tests_for_{}", item_trait.ident);
+  let histories_module_name = format_ident!("__live_prop_test_histories_for_{}", item_trait.ident);
 
   item_trait.items = new_items;
   (quote! {
@@ -569,10 +564,8 @@ fn function_replacements<T: Parse>(
         ),
       }
       let method_name = &analyzed_signature.signature.ident;
-      let trait_tests_macro_ident = Ident::new(
-        &format!("__live_prop_test_trait_tests_for_{}", last_segment.ident),
-        Span::call_site(),
-      );
+      let trait_tests_macro_ident =
+        format_ident!("__live_prop_test_trait_tests_for_{}", last_segment.ident);
       let trait_tests_histories_path_end: Path = syn::parse_str(&format!(
         "__live_prop_test_histories_for_{}::{}",
         last_segment.ident, method_name
