@@ -2,7 +2,7 @@
 Fearlessly write both cheap and expensive runtime tests (contracts) for functions.
 
 */
-
+#![doc(html_root_url = "https://docs.rs/live-prop-test/0.1.0")]
 #![deny(missing_debug_implementations)]
 #![deny(missing_docs)]
 

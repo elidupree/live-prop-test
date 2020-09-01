@@ -1,10 +1,10 @@
 /*!
 Proc macros for `live-prop-test`.
 
-See the [`live_prop_test`] documentation for details.
+See the [`live_prop_test`](../live_prop_test/index.html) documentation for details.
 
 */
-
+#![doc(html_root_url = "https://docs.rs/live-prop-test-macros/0.1.0")]
 #![deny(missing_docs)]
 extern crate proc_macro;
 

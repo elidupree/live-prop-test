@@ -3,9 +3,14 @@ name = "live-prop-test"
 version = "0.1.0"
 authors = ["Eli Dupree <vcs@elidupree.com>"]
 edition = "2018"
+description = "Fearlessly write both cheap and expensive runtime tests (contracts) for functions."
+repository = "https://github.com/elidupree/live-prop-test/"
+readme = "../README.md"
+keywords = ["property", "testing", "contracts"]
+categories = ["development-tools", "development-tools::testing"]
 
 [dependencies]
-live-prop-test-macros = { path = "../live-prop-test-macros", version = "0.1" }
+live-prop-test-macros = { path = "../live-prop-test-macros", version = "0.1.0" }
 rand = "0.7.3"
 log = "0.4.8"
 scopeguard = "1.1"
@@ -16,3 +21,4 @@ cfg-if = "0.1.10"
 
 [dev-dependencies]
 proptest = "0.9.5"
+version-sync = "0.9"

@@ -3,6 +3,11 @@ name = "live-prop-test-macros"
 version = "0.1.0"
 authors = ["Eli Dupree <vcs@elidupree.com>"]
 edition = "2018"
+description = "Proc macros for live-prop-test."
+repository = "https://github.com/elidupree/live-prop-test/"
+readme = "../README.md"
+keywords = ["property", "testing", "contracts"]
+categories = ["development-tools", "development-tools::testing"]
 
 [lib]
 proc-macro = true
@@ -16,3 +21,4 @@ proc-macro-error = "1.0.4"
 [dev-dependencies]
 trybuild = "1.0"
 live-prop-test = { path = "../live-prop-test", version = "0.1" }
+version-sync = "0.9"
