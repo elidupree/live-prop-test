@@ -296,6 +296,15 @@ impl Fielded {
 }
 
 #[live_prop_test]
+impl Fielded {
+  #[allow(dead_code)]
+  #[live_prop_test(postcondition = "false")]
+  fn method_with_impl_trait_return_and_containing_impl() -> impl ::std::fmt::Debug {
+    3
+  }
+}
+
+#[live_prop_test]
 trait FancierTestedTrait<T: ::std::fmt::Debug> {
   #[live_prop_test(postcondition = "false")]
   fn method_with_impl_trait_argument(&self, _c: impl ::std::fmt::Debug) {}

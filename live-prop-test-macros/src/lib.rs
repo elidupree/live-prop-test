@@ -702,17 +702,28 @@ fn function_replacements<T: Parse>(
       let self_ty = &containing_impl.self_ty;
       let (impl_generics, ty_generics, where_clause) = containing_impl.generics.split_for_impl();
 
-      (
-        quote_spanned! {*default_span=>
-          trait __LivePropTestOriginalFunctionExt #impl_generics #where_clause {
-            #inner_function_signature;
-          }
-          impl #impl_generics __LivePropTestOriginalFunctionExt #ty_generics for #self_ty #where_clause {
-            #inner_function_definition
-          }
-        },
-        quote_spanned!(*default_span=> <#self_ty as __LivePropTestOriginalFunctionExt #ty_generics>::#inner_function_name),
-      )
+      if containing_impl.trait_.is_some() {
+        (
+          quote_spanned! {*default_span=>
+            trait __LivePropTestOriginalFunctionExt #impl_generics #where_clause {
+              #inner_function_signature;
+            }
+            impl #impl_generics __LivePropTestOriginalFunctionExt #ty_generics for #self_ty #where_clause {
+              #inner_function_definition
+            }
+          },
+          quote_spanned!(*default_span=> <#self_ty as __LivePropTestOriginalFunctionExt #ty_generics>::#inner_function_name),
+        )
+      } else {
+        (
+          quote_spanned! {*default_span=>
+            impl #impl_generics #self_ty #where_clause {
+              #inner_function_definition
+            }
+          },
+          quote_spanned!(*default_span=> <#self_ty>::#inner_function_name),
+        )
+      }
     }
     ContainingImpl::Trait(containing_trait) => {
       let trait_name = &containing_trait.ident;
