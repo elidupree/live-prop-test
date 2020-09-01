@@ -1,3 +1,11 @@
+/*!
+Proc macros for `live-prop-test`.
+
+See the [`live_prop_test`] documentation for details.
+
+*/
+
+#![deny(missing_docs)]
 extern crate proc_macro;
 
 use proc_macro::TokenStream;

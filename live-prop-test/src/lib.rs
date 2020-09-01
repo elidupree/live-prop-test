@@ -1,4 +1,10 @@
+/*!
+Fearlessly write both cheap and expensive runtime tests (contracts) for functions.
+
+*/
+
 #![deny(missing_debug_implementations)]
+#![deny(missing_docs)]
 
 use once_cell::sync::OnceCell;
 use scopeguard::defer;
@@ -48,6 +54,7 @@ pub fn mock_sleep(duration: Duration) {
   MOCK_TIME.with(|a| *a.borrow_mut() += duration)
 }
 
+#[doc(hidden)]
 pub trait LivePropTestResult {
   fn canonicalize(self) -> Result<(), Option<String>>;
 }
@@ -66,6 +73,22 @@ impl LivePropTestResult for Result<(), String> {
   }
 }
 
+/**
+The config builder for initializing live-prop-test with custom settings.
+
+You usually want either [`initialize()`](fn.initialize.html) or [`initialize_for_unit_tests()`](fn.initialize_for_unit_tests.html),
+but some situations require special settings.
+
+```
+use live_prop_test::LivePropTestConfig;
+
+let config = LivePropTestConfig::default()
+    .throttle_expensive_tests(false)
+    .panic_on_errors(false);
+
+live_prop_test::initialize_with_config(config);
+```
+*/
 #[derive(Debug)]
 pub struct LivePropTestConfig {
   initialized_explicitly: bool,
@@ -103,7 +126,7 @@ impl LivePropTestConfig {
     }
   }
   fn for_internal_tests() -> LivePropTestConfig {
-    // unit tests should be consistent, not using any random numbers to decide which things to test.
+    // internal tests should be consistent, not using any random numbers to decide which things to test.
     //
     LivePropTestConfig {
       initialized_explicitly: false,
@@ -114,15 +137,50 @@ impl LivePropTestConfig {
       time_sources: TimeSources::Mock,
     }
   }
+  /**
+  Set whether to panic on errors (default: true).
 
+  If this is set to false, errors will be logged using [`log::error!`](../log/macro.error.html) instead.
+  */
   pub fn panic_on_errors(mut self, panic_on_errors: bool) -> Self {
     self.panic_on_errors = panic_on_errors;
     self
   }
+  /**
+  Set whether to throttle expensive tests (default: true).
+
+  If this is set to false, all tests will be run, regardless of how much time they take.
+  */
   pub fn throttle_expensive_tests(mut self, throttle_expensive_tests: bool) -> Self {
     self.throttle_expensive_tests = throttle_expensive_tests;
     self
   }
+  /**
+  Replace the source of time used for throttling expensive tests.
+
+  By default, live-prop-test uses [`cpu_time::ThreadTime`](../cpu_time/struct.ThreadTime.html)
+  to count time. This is usually available, but not on all platforms.
+  (Currently, it's only available on Windows and unix-based operating systems,
+  such as Linux and Mac OS.) If you're building for a different platform,
+  such as WebAssembly, you need to override it.
+
+  The callback you provide should return a Duration from an arbitrary starting point.
+
+  On the web, we recommend using
+  [`performance.now()`](https://developer.mozilla.org/en-US/docs/Web/API/Performance/now)
+  (wrapped in `Duration::from_secs_f64(now * 0.001)`).
+
+  Note that for test throttling, live-prop-test attempts to use only
+  a fraction of the time that passes, *as measured by this time source*.
+  So thread time and real time behave slightly differently: if the
+  current thread spends most of its time sleeping, using thread time will
+  also spend hardly any time testing – which is polite to the rest of
+  the system – while using real time will make it use much more time
+  (although still much less than 100% of a CPU core). This could
+  behave pathologically in the case where there are many threads,
+  expensive tests that are called frequently, AND the library is set to
+  use real time rather than thread time.
+  */
   pub fn override_time_source(
     mut self,
     time_source: Box<dyn Fn() -> Duration + Send + Sync>,
@@ -131,7 +189,7 @@ impl LivePropTestConfig {
     self
   }
 
-  pub fn initialize(mut self) {
+  fn initialize(mut self) {
     let for_unit_tests = self.for_unit_tests;
     let for_internal_tests = self.for_internal_tests;
     self.initialized_explicitly = true;
@@ -150,7 +208,64 @@ impl LivePropTestConfig {
   }
 }
 
-// Currently tests all recursive calls, but no API guarantees about recursive calls
+/// Initialize the library with default settings.
+///
+/// You usually want to call this at the top of your main function.
+/// For tests, you usually want [`initialize_for_unit_tests()`](fn.initialize_for_unit_tests.html) instead.
+///
+/// # Panics
+///
+/// This function will panic if you have already initialized the library
+/// with different settings.
+/// Currently, it also panics if you have already initialized the library
+/// with the same settings, but that may change in the future.
+///
+/// All functions with tests may panic if you call them when you have not
+/// yet initialized the library.
+pub fn initialize() {
+  LivePropTestConfig::default().initialize()
+}
+
+/// Initialize the library with custom settings.
+///
+/// You usually want either [`initialize()`](fn.initialize.html) or [`initialize_for_unit_tests()`](fn.initialize_for_unit_tests.html),
+/// but some situations require special settings.
+///
+/// See the [`LivePropTestConfig`](struct.LivePropTestConfig.html) page for details.
+///
+/// # Panics
+///
+/// This function will panic if you have already initialized the library
+/// with different settings.
+/// Currently, it also panics if you have already initialized the library
+/// with the same settings, but that may change in the future.
+///
+/// All functions with tests may panic if you call them when you have not
+/// yet initialized the library.
+pub fn initialize_with_config(config: LivePropTestConfig) {
+  config.initialize()
+}
+
+/// Initialize the library for unit tests.
+///
+/// This should be called at the top of every unit test. This form of initialization is
+/// guaranteed to be idempotent, to support Rust running multiple tests in the same binary.
+///
+/// This form of initialization makes live-prop-test behave *deterministically*.
+/// No tests will be throttled based on time taken; all top-level calls will be tested.
+///
+/// We currently offer no API guarantees about whether *recursive* calls will be tested.
+/// The current implementation tests all recursive calls, which could be a problem for
+/// expensive tests on calls with many branches. A future version of live-prop-test may
+/// test none of them, or test only a deterministic subset of them.
+///
+/// # Panics
+///
+/// This function will panic if you have already initialized the library
+/// with different settings.
+///
+/// All functions with tests may panic if you call them when you have not
+/// yet initialized the library.
 pub fn initialize_for_unit_tests() {
   LivePropTestConfig::for_unit_tests().initialize()
 }
@@ -171,6 +286,13 @@ fn global_config() -> &'static LivePropTestConfig {
   &get_globals().config
 }
 
+/**
+Non-panicking assertion for use in complex test functions.
+
+Just like `std::assert!`, but returns a `Result<(), String>::Err` instead of panicking.
+
+See the [crate-level documentation](index.html) for examples.
+*/
 #[macro_export]
 macro_rules! lpt_assert {
     ($cond:expr) => {
@@ -186,6 +308,13 @@ macro_rules! lpt_assert {
     };
 }
 
+/**
+Non-panicking assertion for use in complex test functions.
+
+Just like `std::assert_eq!`, but returns a `Result<(), String>::Err` instead of panicking.
+
+See the [crate-level documentation](index.html) for examples.
+*/
 #[macro_export]
 macro_rules! lpt_assert_eq {
     ($left:expr, $right:expr) => {{
@@ -210,6 +339,13 @@ macro_rules! lpt_assert_eq {
     }};
 }
 
+/**
+Non-panicking assertion for use in complex test functions.
+
+Just like `std::assert_ne!`, but returns a `Result<(), String>::Err` instead of panicking.
+
+See the [crate-level documentation](index.html) for examples.
+*/
 #[macro_export]
 macro_rules! lpt_assert_ne {
     ($left:expr, $right:expr) => {{
@@ -232,29 +368,34 @@ macro_rules! lpt_assert_ne {
     }};
 }
 
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct TestsSetup {
   any_tests_running: bool,
   failures: Vec<TestFailure>,
 }
 
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct TestFailure {
   pub test: String,
   pub failure_message: Option<String>,
 }
 
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct TestsFinisher {
   shared_setup_time_taken: Option<Duration>,
   failures: Vec<TestFailure>,
 }
 
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct TestFailuresCollector<'a> {
   failures: &'a mut Vec<TestFailure>,
 }
 
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct TestTemporaries<T> {
   data: Option<TestTemporariesInner<T>>,
@@ -271,6 +412,7 @@ thread_local! {
 }
 
 impl TestsSetup {
+  #[doc(hidden)]
   #[allow(clippy::new_without_default)]
   pub fn new() -> TestsSetup {
     throttling_internals::global_update_if_needed();
@@ -279,6 +421,8 @@ impl TestsSetup {
       failures: Vec::new(),
     }
   }
+
+  #[doc(hidden)]
   pub fn setup_test<T>(
     &mut self,
     history: &TestHistory,
@@ -304,6 +448,8 @@ impl TestsSetup {
     };
     TestTemporaries { data }
   }
+
+  #[doc(hidden)]
   pub fn finish_setup<A>(
     self,
     function_display_meta: TestFunctionDisplayMeta,
@@ -340,12 +486,14 @@ impl TestsSetup {
 }
 
 impl<'a> TestFailuresCollector<'a> {
+  #[doc(hidden)]
   pub fn fail_test(&mut self, failure: TestFailure) {
     self.failures.push(failure)
   }
 }
 
 impl TestsFinisher {
+  #[doc(hidden)]
   pub fn finish_test<T>(
     &mut self,
     history: &TestHistory,
@@ -378,6 +526,7 @@ impl TestsFinisher {
     }
   }
 
+  #[doc(hidden)]
   pub fn finish<A>(
     self,
     function_display_meta: TestFunctionDisplayMeta,
@@ -501,12 +650,14 @@ fn {}_regression() {{
 mod throttling_internals;
 use throttling_internals::TestHistoryInner;
 
+#[doc(hidden)]
 #[derive(Debug)]
 pub struct TestHistory {
   cell: RefCell<TestHistoryInner>,
 }
 
 impl TestHistory {
+  #[doc(hidden)]
   #[allow(clippy::new_without_default)]
   pub fn new() -> TestHistory {
     TestHistory {
@@ -526,6 +677,7 @@ impl TestHistory {
 pub struct MaybeDebug<T>(pub T);
 impl<T: ::std::fmt::Debug> MaybeDebug<T> {
   // note: using an obscure name because there could hypothetically be a trait that is in scope that ALSO has a blanket impl for all T and a method named `represent`
+  #[doc(hidden)]
   pub fn __live_prop_test_represent(&self) -> ::std::string::String {
     ::std::format!("{:?}", &self.0)
   }
