@@ -347,7 +347,11 @@ impl AnalyzedFunctionAttributes {
     let initializers =
       (0..num_bundles).map(|_| quote_spanned!(default_span=> ::live_prop_test::TestHistory::new()));
     let histories_declaration: ItemMacro = parse_quote_spanned!(default_span=> ::std::thread_local! {
-      static __LIVE_PROP_TEST_HISTORIES: [::live_prop_test::TestHistory; #num_bundles] = [#(#initializers,)*];
+      static __LIVE_PROP_TEST_HISTORIES: [::live_prop_test::TestHistory; #num_bundles] = {
+        #[cfg(test)]
+        ::live_prop_test::notice_cfg_test();
+        [#(#initializers,)*]
+      };
     });
     AnalyzedFunctionAttributes {
       default_span,

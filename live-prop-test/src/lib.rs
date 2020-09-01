@@ -285,6 +285,16 @@ fn global_config() -> &'static LivePropTestConfig {
   &get_globals().config
 }
 
+#[doc(hidden)]
+pub fn notice_cfg_test() {
+  let not_explicitly_initialized = GLOBALS.get().map_or(true, |globals| {
+    globals.config.special_case == ConfigSpecialCase::Implicit
+  });
+  if not_explicitly_initialized {
+    panic!("In tests, live-prop-test must be initialized explicitly. Did you forget to put `live_prop_test::initialize_for_unit_tests()` at the top of all of your test functions?")
+  }
+}
+
 /**
 Non-panicking assertion for use in complex test functions.
 
