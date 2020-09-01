@@ -275,6 +275,13 @@ fn implementor_with_own_tests_fails_twice() {
 
 #[live_prop_test(postcondition = "false")]
 fn method_with_impl_trait_argument(_a: impl ::std::fmt::Debug) {}
+#[live_prop_test(postcondition = "false")]
+fn method_with_impl_trait_generic_parameter<
+  T: ::std::iter::Iterator<Item = impl ::std::fmt::Debug>,
+>(
+  _a: T,
+) {
+}
 
 #[live_prop_test]
 trait FancierTestedTrait<T: ::std::fmt::Debug> {
