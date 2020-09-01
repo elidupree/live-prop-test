@@ -283,6 +283,18 @@ fn method_with_impl_trait_generic_parameter<
 ) {
 }
 
+#[live_prop_test(postcondition = "false")]
+fn method_with_impl_trait_return() -> impl ::std::fmt::Debug {
+  3
+}
+
+impl Fielded {
+  #[live_prop_test(postcondition = "false")]
+  fn method_with_impl_trait_return() -> impl ::std::fmt::Debug {
+    3
+  }
+}
+
 #[live_prop_test]
 trait FancierTestedTrait<T: ::std::fmt::Debug> {
   #[live_prop_test(postcondition = "false")]
