@@ -91,20 +91,24 @@ live_prop_test::initialize_with_config(config);
 */
 #[derive(Debug)]
 pub struct LivePropTestConfig {
-  initialized_explicitly: bool,
-  for_unit_tests: bool,
-  for_internal_tests: bool,
+  special_case: ConfigSpecialCase,
   panic_on_errors: bool,
   throttle_expensive_tests: bool,
   time_sources: TimeSources,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ConfigSpecialCase {
+  ForUnitTests,
+  ForInternalTests,
+  Implicit,
+  Explicit,
+}
+
 impl Default for LivePropTestConfig {
   fn default() -> LivePropTestConfig {
     LivePropTestConfig {
-      initialized_explicitly: false,
-      for_unit_tests: false,
-      for_internal_tests: false,
+      special_case: ConfigSpecialCase::Explicit,
       panic_on_errors: true,
       throttle_expensive_tests: true,
       time_sources: TimeSources::Default,
@@ -117,9 +121,7 @@ impl LivePropTestConfig {
     // unit tests should be consistent, not using any random numbers to decide which things to test.
     //
     LivePropTestConfig {
-      initialized_explicitly: false,
-      for_unit_tests: true,
-      for_internal_tests: false,
+      special_case: ConfigSpecialCase::ForUnitTests,
       panic_on_errors: true,
       throttle_expensive_tests: false,
       time_sources: TimeSources::Default,
@@ -129,12 +131,18 @@ impl LivePropTestConfig {
     // internal tests should be consistent, not using any random numbers to decide which things to test.
     //
     LivePropTestConfig {
-      initialized_explicitly: false,
-      for_unit_tests: false,
-      for_internal_tests: true,
+      special_case: ConfigSpecialCase::ForInternalTests,
       panic_on_errors: true,
       throttle_expensive_tests: true,
       time_sources: TimeSources::Mock,
+    }
+  }
+  fn implicit() -> LivePropTestConfig {
+    // unit tests should be consistent, not using any random numbers to decide which things to test.
+    //
+    LivePropTestConfig {
+      special_case: ConfigSpecialCase::Implicit,
+      ..LivePropTestConfig::default()
     }
   }
   /**
@@ -189,59 +197,53 @@ impl LivePropTestConfig {
     self
   }
 
-  fn initialize(mut self) {
-    let for_unit_tests = self.for_unit_tests;
-    let for_internal_tests = self.for_internal_tests;
-    self.initialized_explicitly = true;
+  fn initialize(self) {
+    let special_case = self.special_case;
     let mut already_initialized = true;
     let result = GLOBALS.get_or_init(|| {
       already_initialized = false;
       LivePropTestGlobals { config: self }
     });
-
-    if already_initialized
-      && !(for_unit_tests && result.config.for_unit_tests)
-      && !(for_internal_tests && result.config.for_internal_tests)
-    {
-      panic!("Attempted to initialize live-prop-test when it was already initialized. (Note: If this is in a #[test], be aware that multiple tests may run during the same program execution. Consider using `live_prop_test::initialize_for_unit_tests()`, which is idempotent.)");
+    if already_initialized {
+      if special_case == ConfigSpecialCase::Implicit {
+        unreachable!()
+      } else if special_case == ConfigSpecialCase::Explicit
+        || result.config.special_case != special_case
+      {
+        if result.config.special_case == ConfigSpecialCase::Implicit {
+          const NOTE: &str = "In live-prop-test, if any functions with tests are run when live-prop-test has not yet been initialized, then it implicitly performs a default initialization, which is okay, but in this case, there was also an explicit initialization after that, which is an error.";
+          match special_case {
+            ConfigSpecialCase::ForUnitTests => panic!("Used live-prop-test before calling `initialize_for_unit_tests()`. Did you forget to put `live_prop_test::initialize_for_unit_tests()` at the top of all of your test functions? (Note: In Rust, multiple tests may run within the same program execution. {})", NOTE),
+            ConfigSpecialCase::Explicit => panic!("Used live-prop-test before calling `initialize_with_config()`. (Note: {})", NOTE),
+            _ => panic!("Used live-prop-test before initializing it. (Note: {})", NOTE)
+          }
+        } else {
+          panic!("Attempted to initialize live-prop-test when it was already initialized. (Note: If this is in a #[test], be aware that multiple tests may run during the same program execution. Consider using `live_prop_test::initialize_for_unit_tests()`, which is idempotent.)");
+        }
+      }
     }
   }
 }
 
-/// Initialize the library with default settings.
-///
-/// You usually want to call this at the top of your main function.
-/// For tests, you usually want [`initialize_for_unit_tests()`](fn.initialize_for_unit_tests.html) instead.
-///
-/// # Panics
-///
-/// This function will panic if you have already initialized the library
-/// with different settings.
-/// Currently, it also panics if you have already initialized the library
-/// with the same settings, but that may change in the future.
-///
-/// All functions with tests may panic if you call them when you have not
-/// yet initialized the library.
-pub fn initialize() {
-  LivePropTestConfig::default().initialize()
-}
-
 /// Initialize the library with custom settings.
 ///
-/// You usually want either [`initialize()`](fn.initialize.html) or [`initialize_for_unit_tests()`](fn.initialize_for_unit_tests.html),
-/// but some situations require special settings.
+/// You don't usually need to call this. live-prop-test
+/// implicitly performs a default initialization if any functions with tests are run
+/// when it has not been initialized explicitly. And for unit tests, you usually
+/// want [`initialize_for_unit_tests()`](fn.initialize_for_unit_tests.html).
+/// But some situations require special settings.
+///
+/// If you do use this function, it should go at the top of your main function,
+/// so that it is in effect before any tested functions are called.
 ///
 /// See the [`LivePropTestConfig`](struct.LivePropTestConfig.html) page for details.
 ///
 /// # Panics
 ///
-/// This function will panic if you have already initialized the library
-/// with different settings.
+/// This function will panic if you have already called any function with tests,
+/// or explicitly initialized the library with different settings.
 /// Currently, it also panics if you have already initialized the library
 /// with the same settings, but that may change in the future.
-///
-/// All functions with tests may panic if you call them when you have not
-/// yet initialized the library.
 pub fn initialize_with_config(config: LivePropTestConfig) {
   config.initialize()
 }
@@ -254,18 +256,16 @@ pub fn initialize_with_config(config: LivePropTestConfig) {
 /// This form of initialization makes live-prop-test behave *deterministically*.
 /// No tests will be throttled based on time taken; all top-level calls will be tested.
 ///
-/// We currently offer no API guarantees about whether *recursive* calls will be tested.
+/// We currently offer no API guarantees about whether *recursive* calls
+/// (i.e. when a function with tests calls another function with tests) will be tested.
 /// The current implementation tests all recursive calls, which could be a problem for
-/// expensive tests on calls with many branches. A future version of live-prop-test may
-/// test none of them, or test only a deterministic subset of them.
+/// expensive tests on calls with many iterations/branches. A future version of
+/// live-prop-test may test none of them, or test only a deterministic subset of them.
 ///
 /// # Panics
 ///
-/// This function will panic if you have already initialized the library
-/// with different settings.
-///
-/// All functions with tests may panic if you call them when you have not
-/// yet initialized the library.
+/// This function will panic if you have already called any function with tests,
+/// or explicitly initialized the library with different settings.
 pub fn initialize_for_unit_tests() {
   LivePropTestConfig::for_unit_tests().initialize()
 }
@@ -276,10 +276,9 @@ pub fn initialize_for_internal_tests() {
 }
 
 fn get_globals() -> &'static LivePropTestGlobals {
-  match GLOBALS.get() {
-    Some(globals) => globals,
-    None => panic!("Attempted to use live-prop-test without initializing it. Consider putting `LivePropTestConfig::default().initialize();` at the top of your main function. (Or `live_prop_test::initialize_for_unit_tests();`, if this is in a unit test.)"),
-  }
+  GLOBALS.get_or_init(|| LivePropTestGlobals {
+    config: LivePropTestConfig::implicit(),
+  })
 }
 
 fn global_config() -> &'static LivePropTestConfig {
@@ -591,7 +590,9 @@ fn announce_failures<A>(
       writeln!(&mut assembled).unwrap();
     }
 
-    if condition_type == "postcondition" && !global_config().for_unit_tests {
+    if condition_type == "postcondition"
+      && global_config().special_case != ConfigSpecialCase::ForUnitTests
+    {
       #[allow(clippy::write_with_newline)]
       write!(
         &mut assembled,
