@@ -17,7 +17,7 @@ use syn::{
   ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Path, ReturnType, Signature,
   Stmt, Token, TraitItem, TraitItemMethod, Type,
 };
-use syn::{Block, Index, ItemConst, PatType};
+use syn::{Block, Index, ItemConst, PatType, TypeImplTrait, TypeParamBound};
 
 /// caveat about Self and generic parameters of the containing impl
 #[proc_macro_error]
@@ -404,9 +404,12 @@ fn live_prop_test_item_trait(
           histories_declaration,
         } = &analyzed_attributes;
 
+        let mut normalized_signature = (*signature).clone();
+        replace_impl_trait_in_argument_position(&mut normalized_signature);
+
         let mut test_signature = Signature {
           ident: format_ident!("__live_prop_test_{}", signature.ident),
-          ..(*signature).clone()
+          ..normalized_signature.clone()
         };
 
         let (arrow, original_return_type) = match &signature.output {
@@ -422,7 +425,8 @@ fn live_prop_test_item_trait(
           .push(parse_quote_spanned!(*default_span=>
             mut __live_prop_test_setup: ::live_prop_test::TestsSetup
           ));
-        let mut callback_argument_types: Vec<Type> = signature
+
+        let mut callback_argument_types: Vec<Type> = normalized_signature
           .inputs
           .iter()
           .map(|input| match input {
@@ -736,7 +740,11 @@ fn function_replacements<T: Parse>(
   };
 
   let (_impl_generics, ty_generics, _where_clause) = signature.generics.split_for_impl();
-  let turbofish = ty_generics.as_turbofish();
+  let turbofish = if has_impl_trait_in_argument_position(signature) {
+    None
+  } else {
+    Some(ty_generics.as_turbofish())
+  };
   let finish_setup_and_call_inner = match use_trait_tests {
     false => {
       let finish_setup = analyzed_signature.finish_setup(parameter_name_exprs);
@@ -1023,6 +1031,50 @@ impl TestBundle {
     );
 
     (setup, finish)
+  }
+}
+
+fn has_impl_trait_in_argument_position(signature: &Signature) -> bool {
+  struct Visitor<'a>(&'a mut bool);
+  impl<'a> Visit<'a> for Visitor<'a> {
+    fn visit_type_impl_trait(&mut self, _: &'a TypeImplTrait) {
+      *self.0 = true;
+    }
+  }
+
+  let mut result = false;
+  Visitor(&mut result).visit_generics(&signature.generics);
+  for parameter in &signature.inputs {
+    Visitor(&mut result).visit_fn_arg(parameter);
+  }
+  result
+}
+
+fn replace_impl_trait_in_argument_position(signature: &mut Signature) {
+  struct Visitor<'a>(&'a mut Vec<(Ident, Punctuated<TypeParamBound, Token![+]>)>);
+  impl<'a> VisitMut for Visitor<'a> {
+    fn visit_type_mut(&mut self, this: &mut Type) {
+      if let Type::ImplTrait(type_impl_trait) = this {
+        let new_parameter = format_ident!("__LivePropTestImplTraitReplacement{}", self.0.len());
+        self.0.push((
+          new_parameter.clone(),
+          std::mem::take(&mut type_impl_trait.bounds),
+        ));
+        *this = parse_quote!(#new_parameter);
+      }
+    }
+  }
+
+  let mut extras = Vec::new();
+  Visitor(&mut extras).visit_generics_mut(&mut signature.generics);
+  for parameter in &mut signature.inputs {
+    Visitor(&mut extras).visit_fn_arg_mut(parameter);
+  }
+  for (ident, bounds) in extras {
+    signature
+      .generics
+      .params
+      .push(parse_quote!(#ident: #bounds))
   }
 }
 
