@@ -291,7 +291,7 @@ pub fn notice_cfg_test() {
     globals.config.special_case == ConfigSpecialCase::Implicit
   });
   if not_explicitly_initialized {
-    panic!("In tests, live-prop-test must be initialized explicitly. Did you forget to put `live_prop_test::initialize_for_unit_tests()` at the top of all of your test functions?")
+    panic!("In test builds, live-prop-test must be initialized explicitly. Did you forget to put `live_prop_test::initialize_for_unit_tests()` at the top of all of your test functions? (This is required because you usually don't want nondeterministic throttling in test builds. If you actually do want the default behavior, you can explicitly initialize using `live_prop_test::initialize_with_config(LivePropTestConfig::default())`, but you should put the test in a separate integration test, so that different tests don't affect each other's behavior.)")
   }
 }
 
