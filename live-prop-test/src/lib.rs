@@ -23,7 +23,7 @@ struct LivePropTestGlobals {
 }
 
 enum TimeSources {
-  CpuTime,
+  Default,
   Mock,
   SinceStartFunction(Box<dyn Fn() -> Duration + Send + Sync>),
 }
@@ -31,7 +31,7 @@ enum TimeSources {
 impl fmt::Debug for TimeSources {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
-      TimeSources::CpuTime => f.write_str("CpuTime"),
+      TimeSources::Default => f.write_str("Default"),
       TimeSources::Mock => f.write_str("Mock"),
       TimeSources::SinceStartFunction(_) => f.write_str("SinceStartFunction(...)"),
     }
@@ -107,7 +107,7 @@ impl Default for LivePropTestConfig {
       for_internal_tests: false,
       panic_on_errors: true,
       throttle_expensive_tests: true,
-      time_sources: TimeSources::CpuTime,
+      time_sources: TimeSources::Default,
     }
   }
 }
@@ -122,7 +122,7 @@ impl LivePropTestConfig {
       for_internal_tests: false,
       panic_on_errors: true,
       throttle_expensive_tests: false,
-      time_sources: TimeSources::CpuTime,
+      time_sources: TimeSources::Default,
     }
   }
   fn for_internal_tests() -> LivePropTestConfig {
@@ -159,10 +159,9 @@ impl LivePropTestConfig {
   Replace the source of time used for throttling expensive tests.
 
   By default, live-prop-test uses [`cpu_time::ThreadTime`](../cpu_time/struct.ThreadTime.html)
-  to count time. This is usually available, but not on all platforms.
-  (Currently, it's only available on Windows and unix-based operating systems,
-  such as Linux and Mac OS.) If you're building for a different platform,
-  such as WebAssembly, you need to override it.
+  if available (on Windows and unix-based operating systems),
+  and falls back to `std::time::Instant` if `cpu_time` is not available.
+  In `wasm32` builds, neither is available, so you need to override it.
 
   The callback you provide should return a Duration from an arbitrary starting point.
 
@@ -175,10 +174,11 @@ impl LivePropTestConfig {
   So thread time and real time behave slightly differently: if the
   current thread spends most of its time sleeping, using thread time will
   also spend hardly any time testing – which is polite to the rest of
-  the system – while using real time will make it use much more time
+  the system – while using real time will make it spend much more time
   (although still much less than 100% of a CPU core). This could
-  behave pathologically in the case where there are many threads,
-  expensive tests that are called frequently, AND the library is set to
+  behave pathologically (spending too much time testing)
+  in the case where there are many threads
+  that all call expensive tests frequently, AND the library is set to
   use real time rather than thread time.
   */
   pub fn override_time_source(

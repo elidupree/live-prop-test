@@ -1,5 +1,4 @@
 use crate::TimeSources;
-use cpu_time::ThreadTime;
 use ordered_float::OrderedFloat;
 use rand::random;
 use std::cell::RefCell;
@@ -98,23 +97,37 @@ impl TestHistoryInner {
   }
 }
 
-#[cfg(any(unix, windows))]
-fn default_thread_time() -> Duration {
-  thread_local! {
-    static START_TIME: ThreadTime = ThreadTime::now();
+cfg_if::cfg_if! {
+  if #[cfg(any(unix, windows))] {
+    fn default_thread_time() -> Duration {
+      use cpu_time::ThreadTime;
+      thread_local! {
+        static START_TIME: ThreadTime = ThreadTime::now();
+      }
+
+      START_TIME.with(ThreadTime::elapsed)
+    }
   }
+  else if #[cfg(target_arch = "wasm32")] {
+    fn default_thread_time() -> Duration {
+      panic!("live-prop-test doesn't have a default source of time for wasm builds. Specify a source of time using the `LivePropTestConfig` builder.")
+    }
+  }
+  else {
+    fn default_thread_time() -> Duration {
+      use std::time::Instant;
+      thread_local! {
+        static START_TIME: Instant = Instant::now();
+      }
 
-  START_TIME.with(ThreadTime::elapsed)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn default_thread_time() -> Duration {
-  panic!("live-prop-test uses `cpu-time` as its default source of time, and `cpu-time` isn't available on this platform (only on windows and unix-based platforms). Specify an alternate source using the `LivePropTestConfig` builder.")
+      START_TIME.with(Instant::elapsed)
+    }
+  }
 }
 
 pub(crate) fn thread_time() -> Duration {
   match &crate::global_config().time_sources {
-    TimeSources::CpuTime => default_thread_time(),
+    TimeSources::Default => default_thread_time(),
     TimeSources::Mock => crate::mock_time(),
     TimeSources::SinceStartFunction(function) => (function)(),
   }
