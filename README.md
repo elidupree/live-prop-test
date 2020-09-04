@@ -254,7 +254,7 @@ impl MyClone for ChangesOnClone {
 }
 ```
 
-This is a trade-off. The downside is that you could forget to apply the tests. The upside is, again, library compatibility: You can apply tests to a public trait without changing the API for implementing that trait in your dependencies.
+This is a trade-off. In Rust, there's no way to automatically test all trait impls without changing the trait in some way. The `contracts` crate takes a stricter approach, where all impls of the trait are *required* to include the `#[contract_trait]` attribute. live-prop-test prefers to be more permissive, so that a library crate can test itself internally using live-prop-test, without adding any requirements for impls in downstream crates.
 
 # Future plans
 
