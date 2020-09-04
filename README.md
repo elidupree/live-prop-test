@@ -138,6 +138,29 @@ Precondition and postcondition expressions can be any expression that evaluates 
 
 Within a postcondition expression, there are two special identifiers: `result`, which means the return value of the function; and `old(…expression…)`, meaning that the expression will be evaluated at the beginning of the function call, then stored until the postcondition is checked. (The `old` feature was inspired by the [`contracts`](https://crates.io/crates/contracts) crate.)
 
+The `Result` approach is useful when you have a large external testing function that tests multiple types of failure:
+
+```rust
+#[live_prop_test(postcondition = "complex_postconditions(&old(object.clone()), object)")]
+fn tested_function(object: &mut SomeStruct) {
+  // ...
+}
+
+fn complex_postconditions(old: &SomeStruct, new: &SomeStruct)->Result<(), String> {
+  // ...various calculations...
+  
+  if some_failure {
+    return Err("Failure type 1 occurred".to_string())
+  }
+  
+  // live-prop-test also provides macros like the std assert macros,
+  // which return Err instead of panicking:
+  lpt_assert!(some_condition, "Assertion failure message");
+  lpt_assert_eq!(value, other_value);
+  Ok(())
+}
+``` 
+
 In release builds, the `#[live_prop_test]` attribute on a function does nothing. In debug builds, it wraps the function with tests, performing the following steps:
 1. For each test group attached to the function, decide whether to run those tests.
 2. For each test group that is running, evaluate the precondition expressions and `old` expressions.
@@ -146,7 +169,21 @@ In release builds, the `#[live_prop_test]` attribute on a function does nothing.
 5. For each test group that is running, evaluate the postcondition expressions.
 6. Returns the stored result.
 
+String representations of arguments are created using `Debug` if a Debug impl is available for the argument type in the function scope; if there is no Debug impl available, they are written as "<no Debug impl>". Since specialization is not yet stable, we currently use a method-resolution trick to accomplish this fallback. This is somewhat more limited than specialization: in a generic function, if the argument type is a generic parameter, the Debug impl will only be available if the generic parameter specifically has Debug as a trait bound, regardless of whether the monomorphized type implements Debug.
 
+Due to proc-macro limitations, if you test a method inside an `impl` block (or a `trait` block), you must also add the attribute to the surrounding `impl` (or `trait`).
+
+```rust
+#[live_prop_test] // if this line is removed, it's an error
+impl MyStruct {
+  #[live_prop_test(postcondition = "*result = old(self.field.clone())")]
+  fn get_field_mut(&mut self)->&mut FieldType {
+    &mut self.field
+  }
+}
+```
+
+[TODO: details about time measuring fallbacks, how to enable feature for wasm builds]
 
 # Recursion in tests
 
@@ -175,6 +212,55 @@ fn factorial(input: i32) -> i32 {
 }
 ```
 
+# Trait tests
+
+You can apply tests to trait methods:
+
+```rust
+#[live_prop_test]
+trait MyClone: PartialEq {
+  #[live_prop_test(postcondition = "&result == input")]
+  fn clone(&self) -> Self;
+}
+```
+
+By itself, this doesn't do anything. But later, you can tag a trait *impl* to use the tests:
+
+```rust
+#[derive(PartialEq, Debug)];
+struct MyStruct;
+
+#[live_prop_test(use_trait_tests)]
+impl MyClone for MyStruct {
+  fn clone(&self) -> Self {
+    MyStruct
+  }
+}
+```
+
+This will apply the trait tests to the corresponding methods in the impl.
+
+An impl without `use_trait_tests` will not apply the tests:
 
 
+```rust
+struct ChangesOnClone(i32);
 
+impl MyClone for ChangesOnClone {
+  fn clone(&self) -> Self {
+    // no error, because the tests are not applied!
+    ChangesOnClone(self.0 + 1)
+  }
+}
+```
+
+This is a trade-off. The downside is that you could forget to apply the tests. The upside is, again, library compatibility: You can apply tests to a public trait without changing the API for implementing that trait in your dependencies.
+
+# Future plans
+
+The following features are planned, but not yet designed/implemented:
+* Type invariants (here, a big open question is the API for specifying where/when you want them to be checked)
+* Configuring individual tests to always run/not be throttled
+* Configuring individual tests to run in release mode and/or in dependencies that don't opt in
+* Optionally shrinking failing test inputs (although shrinking will always be opt-in, because we support tests for functions with side effects, and shrinking involves running the tested functions additional times, so "no shrinking" is the only safe default)
+* Optionally generating `#[test]` tests that try randomly generated values, like typical property-based testing libraries. (Right now, it's not *too* hard to write `quickcheck` or `proptest` tests that call `#[live_prop_test]` functions, but there are multiple conveniences that could be gained from making the feature more integrated.)
