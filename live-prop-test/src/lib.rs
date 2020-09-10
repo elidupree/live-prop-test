@@ -9,7 +9,6 @@ Fearlessly write both cheap and expensive runtime tests (contracts) for function
 use once_cell::sync::OnceCell;
 use scopeguard::defer;
 use std::cell::{Cell, RefCell};
-use std::fmt;
 use std::fmt::Write;
 use std::time::Duration;
 
@@ -22,20 +21,17 @@ struct LivePropTestGlobals {
   config: LivePropTestConfig,
 }
 
+#[derive(Debug)]
 enum TimeSources {
   Default,
   Mock,
-  SinceStartFunction(Box<dyn Fn() -> Duration + Send + Sync>),
 }
 
-impl fmt::Debug for TimeSources {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match self {
-      TimeSources::Default => f.write_str("Default"),
-      TimeSources::Mock => f.write_str("Mock"),
-      TimeSources::SinceStartFunction(_) => f.write_str("SinceStartFunction(...)"),
-    }
-  }
+#[derive(Debug)]
+enum ThrottlingBehavior {
+  TimeBased(TimeSources),
+  AlwaysRunTests,
+  NeverRunTests,
 }
 
 // Note: mock time is handled entirely within one thread,
@@ -73,7 +69,11 @@ impl LivePropTestResult for Result<(), String> {
   }
 }
 
-/**
+// Note: This config builder was a candidate for how to configure live-prop-test,
+// but it's not clear whether it would be the best API, and none of the customization
+// is any-longer necessary for any use case I'm currently aware of. So I've
+// removed it from the public API before 0.1.0.
+/*
 The config builder for initializing live-prop-test with custom settings.
 
 You usually want either [`initialize()`](fn.initialize.html) or [`initialize_for_unit_tests()`](fn.initialize_for_unit_tests.html),
@@ -90,11 +90,10 @@ live_prop_test::initialize_with_config(config);
 ```
 */
 #[derive(Debug)]
-pub struct LivePropTestConfig {
+/*pub*/
+struct LivePropTestConfig {
   special_case: ConfigSpecialCase,
-  panic_on_errors: bool,
-  throttle_expensive_tests: bool,
-  time_sources: TimeSources,
+  throttling: ThrottlingBehavior,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -109,9 +108,7 @@ impl Default for LivePropTestConfig {
   fn default() -> LivePropTestConfig {
     LivePropTestConfig {
       special_case: ConfigSpecialCase::Explicit,
-      panic_on_errors: true,
-      throttle_expensive_tests: true,
-      time_sources: TimeSources::Default,
+      throttling: ThrottlingBehavior::TimeBased(TimeSources::Default),
     }
   }
 }
@@ -122,29 +119,24 @@ impl LivePropTestConfig {
     //
     LivePropTestConfig {
       special_case: ConfigSpecialCase::ForUnitTests,
-      panic_on_errors: true,
-      throttle_expensive_tests: false,
-      time_sources: TimeSources::Default,
+      throttling: ThrottlingBehavior::AlwaysRunTests,
     }
   }
   fn for_internal_tests() -> LivePropTestConfig {
-    // internal tests should be consistent, not using any random numbers to decide which things to test.
+    // internal tests need to be throttled based on time
     //
     LivePropTestConfig {
       special_case: ConfigSpecialCase::ForInternalTests,
-      panic_on_errors: true,
-      throttle_expensive_tests: true,
-      time_sources: TimeSources::Mock,
+      throttling: ThrottlingBehavior::TimeBased(TimeSources::Mock),
     }
   }
   fn implicit() -> LivePropTestConfig {
-    // unit tests should be consistent, not using any random numbers to decide which things to test.
-    //
     LivePropTestConfig {
       special_case: ConfigSpecialCase::Implicit,
-      ..LivePropTestConfig::default()
+      throttling: ThrottlingBehavior::NeverRunTests,
     }
   }
+  /*
   /**
   Set whether to panic on errors (default: true).
 
@@ -169,7 +161,9 @@ impl LivePropTestConfig {
   By default, live-prop-test uses [`cpu_time::ThreadTime`](../cpu_time/struct.ThreadTime.html)
   if available (on Windows and unix-based operating systems),
   and falls back to `std::time::Instant` if `cpu_time` is not available.
-  In `wasm32` builds, neither is available, so you need to override it.
+  In `wasm32` builds, neither is available, so the only safe default for time is the
+  constant zero function, meaning that not very many tests will be run.
+  If you want better behavior,  you need to override it.
 
   The callback you provide should return a Duration from an arbitrary starting point.
 
@@ -196,6 +190,7 @@ impl LivePropTestConfig {
     self.time_sources = TimeSources::SinceStartFunction(time_source);
     self
   }
+  */
 
   fn initialize(self) {
     let special_case = self.special_case;
@@ -211,10 +206,10 @@ impl LivePropTestConfig {
         || result.config.special_case != special_case
       {
         if result.config.special_case == ConfigSpecialCase::Implicit {
-          const NOTE: &str = "In live-prop-test, if any functions with tests are run when live-prop-test has not yet been initialized, then it implicitly performs a default initialization, which is okay, but in this case, there was also an explicit initialization after that, which is an error.";
+          const NOTE: &str = "In live-prop-test, if any functions with tests are run when live-prop-test has not been initialized, then it implicitly ignores them, which is okay, but in this case, there was also an explicit initialization after that, which is an error.";
           match special_case {
             ConfigSpecialCase::ForUnitTests => panic!("Used live-prop-test before calling `initialize_for_unit_tests()`. Did you forget to put `live_prop_test::initialize_for_unit_tests()` at the top of all of your test functions? (Note: In Rust, multiple tests may run within the same program execution. {})", NOTE),
-            ConfigSpecialCase::Explicit => panic!("Used live-prop-test before calling `initialize_with_config()`. (Note: {})", NOTE),
+            ConfigSpecialCase::Explicit => panic!("Used live-prop-test before calling `initialize()`. (Note: {})", NOTE),
             _ => panic!("Used live-prop-test before initializing it. (Note: {})", NOTE)
           }
         } else {
@@ -225,6 +220,23 @@ impl LivePropTestConfig {
   }
 }
 
+/// Initialize the library with default settings.
+///
+/// You generally want to call this at the top of your main function.
+/// For tests, you generally want [`initialize_for_unit_tests()`](fn.initialize_for_unit_tests.html) instead.
+///
+/// # Panics
+///
+/// This function will panic if you have already called any function with tests,
+/// or explicitly initialized the library with different settings.
+///
+/// Currently, it also panics if you have already initialized the library
+/// with the same settings, but that may change in the future.
+pub fn initialize() {
+  LivePropTestConfig::default().initialize()
+}
+
+/*
 /// Initialize the library with custom settings.
 ///
 /// You don't usually need to call this. live-prop-test
@@ -246,7 +258,7 @@ impl LivePropTestConfig {
 /// with the same settings, but that may change in the future.
 pub fn initialize_with_config(config: LivePropTestConfig) {
   config.initialize()
-}
+}*/
 
 /// Initialize the library for unit tests.
 ///
@@ -256,11 +268,12 @@ pub fn initialize_with_config(config: LivePropTestConfig) {
 /// This form of initialization makes live-prop-test behave *deterministically*.
 /// No tests will be throttled based on time taken; all top-level calls will be tested.
 ///
-/// We currently offer no API guarantees about whether *recursive* calls
-/// (i.e. when a function with tests calls another function with tests) will be tested.
-/// The current implementation tests all recursive calls, which could be a problem for
-/// expensive tests on calls with many iterations/branches. A future version of
-/// live-prop-test may test none of them, or test only a deterministic subset of them.
+/// If a function with tests calls another function with tests, we don't currently
+/// make any API guarantees about whether the inner function will be tested.
+/// The current implementation tests all such calls, which could be a problem
+/// for expensive tests on calls with many iterations/branches.
+/// A future version of live-prop-test may test none of them,
+/// or test only a deterministic subset of them.
 ///
 /// # Panics
 ///
@@ -291,7 +304,7 @@ pub fn notice_cfg_test() {
     globals.config.special_case == ConfigSpecialCase::Implicit
   });
   if not_explicitly_initialized {
-    panic!("In test builds, live-prop-test must be initialized explicitly. Did you forget to put `live_prop_test::initialize_for_unit_tests()` at the top of all of your test functions? (This is required because you usually don't want nondeterministic throttling in test builds. If you actually do want the default behavior, you can explicitly initialize using `live_prop_test::initialize_with_config(LivePropTestConfig::default())`, but you should put the test in a separate integration test, so that different tests don't affect each other's behavior.)")
+    panic!("In test builds, live-prop-test must be initialized explicitly. Did you forget to put `live_prop_test::initialize_for_unit_tests()` at the top of all of your test functions? (This is required because you usually don't want nondeterministic throttling in test builds. If you actually do want the default behavior, you can explicitly initialize using `live_prop_test::initialize()`, but you should put the test in a separate integration test, so that different tests don't affect each other's behavior.)")
   }
 }
 
@@ -441,7 +454,7 @@ impl TestsSetup {
       && history.cell.borrow_mut().roll_to_test()
     {
       self.any_tests_running = true;
-      let start_time = throttling_internals::thread_time();
+      let start_time = throttling_internals::thread_time().unwrap_or_default();
       let failures = &mut self.failures;
       let setup_data = EXECUTION_IS_INSIDE_TEST.with(|in_test| {
         in_test.set(true);
@@ -450,7 +463,7 @@ impl TestsSetup {
       });
       Some(TestTemporariesInner {
         setup_data,
-        setup_time_taken: throttling_internals::thread_time() - start_time,
+        setup_time_taken: throttling_internals::thread_time().unwrap_or_default() - start_time,
       })
     } else {
       None
@@ -468,7 +481,7 @@ impl TestsSetup {
     for<'a> &'a A: IntoIterator<Item = &'a String>,
   {
     let (shared_setup_time_taken, parameter_value_representations) = if self.any_tests_running {
-      let start_time = throttling_internals::thread_time();
+      let start_time = throttling_internals::thread_time().unwrap_or_default();
       let parameter_value_representations = (make_parameter_value_representations)();
       announce_failures(
         function_display_meta,
@@ -477,7 +490,7 @@ impl TestsSetup {
         "postcondition",
       );
       (
-        Some(throttling_internals::thread_time() - start_time),
+        Some(throttling_internals::thread_time().unwrap_or_default() - start_time),
         Some(parameter_value_representations),
       )
     } else {
@@ -515,7 +528,7 @@ impl TestsFinisher {
         setup_time_taken,
       }) = temporaries.data
       {
-        let start_time = throttling_internals::thread_time();
+        let start_time = throttling_internals::thread_time().unwrap_or_default();
         let failures = &mut self.failures;
         EXECUTION_IS_INSIDE_TEST.with(|in_test| {
           in_test.set(true);
@@ -523,7 +536,8 @@ impl TestsFinisher {
           (finish)(setup_data, &mut TestFailuresCollector { failures });
         });
 
-        let finishing_time_taken = throttling_internals::thread_time() - start_time;
+        let finishing_time_taken =
+          throttling_internals::thread_time().unwrap_or_default() - start_time;
         let total_time_taken = setup_time_taken + *shared_setup_time_taken + finishing_time_taken;
 
         /*println!(
@@ -650,11 +664,7 @@ fn {}_regression() {{
       write!(&mut assembled, "{});\n}}\n\n", passed_arguments.join(",")).unwrap();
     }
 
-    if global_config().panic_on_errors {
-      panic!("{}", assembled);
-    } else {
-      log::error!("{}", assembled);
-    }
+    panic!("{}", assembled);
   }
 }
 

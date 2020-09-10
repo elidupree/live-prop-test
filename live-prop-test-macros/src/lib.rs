@@ -27,7 +27,9 @@ use syn::{
 };
 use syn::{Block, Index, ItemConst, PatType, TypeImplTrait, TypeParamBound};
 
-/// caveat about Self and generic parameters of the containing impl
+/// The whole point.
+///
+/// See the [`live_prop_test`](../live_prop_test/index.html) documentation for details.
 #[proc_macro_error]
 #[proc_macro_attribute]
 pub fn live_prop_test(arguments: TokenStream, input: TokenStream) -> TokenStream {

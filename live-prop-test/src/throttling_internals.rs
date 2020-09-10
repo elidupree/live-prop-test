@@ -1,4 +1,4 @@
-use crate::TimeSources;
+use crate::{ThrottlingBehavior, TimeSources};
 use ordered_float::OrderedFloat;
 use rand::random;
 use std::cell::RefCell;
@@ -40,15 +40,18 @@ impl Drop for TestHistoryInner {
   }
 }
 
+const TIME_BANK_NO_TIME_SOURCES: &str ="live-prop-test internal error: shouldn't have constructed a TimeBank if there was no time source";
 thread_local! {
   static TIME_BANK: RefCell<TimeBank> = RefCell::new(TimeBank {
-    last_update_time_since_start: thread_time(),
+    last_update_time_since_start: thread_time().expect(TIME_BANK_NO_TIME_SOURCES),
     histories: Vec::new(),
   });
 }
 
 pub(crate) fn global_update_if_needed() {
-  TIME_BANK.with(|bank| bank.borrow_mut().update_if_needed());
+  if let ThrottlingBehavior::TimeBased(_) = crate::global_config().throttling {
+    TIME_BANK.with(|bank| bank.borrow_mut().update_if_needed());
+  }
 }
 
 impl TestHistoryInner {
@@ -60,11 +63,19 @@ impl TestHistoryInner {
         exists: true,
       }),
     });
-    TIME_BANK.with(|bank| bank.borrow_mut().histories.push(shared.clone()));
+    if let ThrottlingBehavior::TimeBased(_) = crate::global_config().throttling {
+      TIME_BANK.with(|bank| bank.borrow_mut().histories.push(shared.clone()));
+    }
     TestHistoryInner { shared }
   }
 
   pub(crate) fn roll_to_test(&mut self) -> bool {
+    match crate::global_config().throttling {
+      ThrottlingBehavior::AlwaysRunTests => return true,
+      ThrottlingBehavior::NeverRunTests => return false,
+      _ => (),
+    };
+
     let mut shared = self.shared.inner.borrow_mut();
 
     // drop off with 1/x^2, leading to a finite expected value of total tests
@@ -78,8 +89,7 @@ impl TestHistoryInner {
     // auto-pass if we have less than that much debt. Also allow slightly more
     // than that much debt as a leeway for timing issues.
     let result = shared.debt < SECONDS_PER_UPDATE * FRACTION_TO_USE_FOR_TESTING * 2.0
-      || random::<f64>() < probability
-      || !crate::global_config().throttle_expensive_tests;
+      || random::<f64>() < probability;
 
     if !result {
       // if result is true, this update will be done when the test finishes,
@@ -108,14 +118,14 @@ cfg_if::cfg_if! {
       START_TIME.with(ThreadTime::elapsed)
     }
   }
-  else if #[cfg(target_arch = "wasm32")] {
+  else if #[cfg(all(target_arch = "wasm32", not(feature="wasm-bindgen"), not(feature="stdweb")))] {
     fn default_thread_time() -> Duration {
-      panic!("live-prop-test doesn't have a default source of time for wasm builds. Specify a source of time using the `LivePropTestConfig` builder.")
+      panic!("live-prop-test doesn't have a default source of time for wasm builds. Specify a source of time by enabling either the `wasm-bindgen` or `stdweb` feature for live-prop-test.")
     }
   }
   else {
     fn default_thread_time() -> Duration {
-      use std::time::Instant;
+      use instant::Instant;
       thread_local! {
         static START_TIME: Instant = Instant::now();
       }
@@ -125,29 +135,25 @@ cfg_if::cfg_if! {
   }
 }
 
-pub(crate) fn thread_time() -> Duration {
-  match &crate::global_config().time_sources {
-    TimeSources::Default => default_thread_time(),
-    TimeSources::Mock => crate::mock_time(),
-    TimeSources::SinceStartFunction(function) => (function)(),
+pub(crate) fn thread_time() -> Option<Duration> {
+  match crate::global_config().throttling {
+    ThrottlingBehavior::TimeBased(TimeSources::Default) => Some(default_thread_time()),
+    ThrottlingBehavior::TimeBased(TimeSources::Mock) => Some(crate::mock_time()),
+    _ => None,
   }
 }
 
 impl TimeBank {
   pub(crate) fn update_if_needed(&mut self) {
-    let time_since_start = thread_time();
+    let time_since_start = thread_time().expect(TIME_BANK_NO_TIME_SOURCES);
     if time_since_start.as_secs_f64()
       >= self.last_update_time_since_start.as_secs_f64() + SECONDS_PER_UPDATE
     {
-      let time_since_last_update = match time_since_start
-        .checked_sub(self.last_update_time_since_start)
-      {
-        Some(a) => a,
-        None => {
-          log::error!("live-prop-test observed negative time since its last global update; this shouldn't be possible");
-          return;
-        }
-      };
+      let time_since_last_update =
+        match time_since_start.checked_sub(self.last_update_time_since_start) {
+          Some(a) => a,
+          None => return,
+        };
 
       self.last_update_time_since_start = time_since_start;
 
