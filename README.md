@@ -2,7 +2,7 @@
 
 Fearlessly write both cheap and expensive runtime tests (contracts) for Rust functions.
 
-# [insert heading]
+# Introduction
 
 Do you love property-based testing, but your example values are hard to construct from nothing?
 
@@ -44,7 +44,14 @@ live_prop_test::initialize_for_unit_tests();
 
 If live-prop-test is not initialized, it won't run any tests. Thus, if you're writing a library crate, you can freely add live-prop-test tests for your own internal testing, without any worry about exposing dependent crates to significant runtime cost (or unreliable panics, if your library has a bug), unless they explicitly opt in.
 
-# Example
+On `wasm32` or `asmjs` targets, you also need to enable either the `wasm-bindgen` feature or the `stdweb` feature, to give live-prop-test a source of timing information:
+
+```toml
+[dependencies]
+live-prop-test = { version = "0.1.0", features = ["wasm-bindgen"] }
+```
+
+## Example
 
 Let's say you've written an optimized function with a mistake in it, like this:
 
@@ -103,9 +110,10 @@ In this case, the generated regression test is valid code, so let's copy it dire
 `live_prop_test::initialize_for_unit_tests()` disables time-based throttling within the test, making sure that all direct function calls are tested. (If a function with tests calls another function with tests, we don't currently make any API guarantees about whether the inner function will be tested. The current implementation tests all such calls, which could be a problem for expensive tests on calls with many iterations/branches. A future version of live-prop-test may test none of them, or test only a deterministic subset of them.)
 
 
+# Details
 
-# Test grouping
 
+## Test grouping
 
 Muliple conditions within the *same* attribute will either run as a group, or be skipped as a group:
 ```rust
@@ -129,10 +137,7 @@ In the first example, the two conditions should be grouped together because they
 
 In the second example, the tests should be separate. This allows live-prop-test to recognize that the cheap test is cheap, so it can run the cheap test much more frequently than the expensive test. If they are grouped together, the cheap test can only run as often as the expensive test.
 
-
-On each function call, if *any* tests are run, we always begin by generating String representations of the inputs. So if the inputs are large, the test will take nontrivial time even if the conditions are trivial. This is a safe default, because – if a postcondition fails – we can always print out the original values of the failing inputs, even if there was interior mutability. (And as always, the test being expensive won't slow down the program much, only make the test run less often.) We may add a way to override this behavior in the future – please post an issue on the repository if you have a use case that needs it!
-
-# Details
+## Precondition/postcondition expressions
 
 Precondition and postcondition expressions can be any expression that evaluates to either `bool` or `Result<(), String>`. In the latter case, the `Err` value will be included in the live-prop-test failure message.
 
@@ -155,11 +160,13 @@ fn complex_postconditions(old: &SomeStruct, new: &SomeStruct)->Result<(), String
   
   // live-prop-test also provides macros like the std assert macros,
   // which return Err instead of panicking:
-  lpt_assert!(some_condition, "Assertion failure message");
-  lpt_assert_eq!(value, other_value);
+  lpt_assert!(some_condition, "Failure type 2 occurred");
+  lpt_assert_eq!(value, other_value, "Failure type 3 occurred");
   Ok(())
 }
 ``` 
+
+## Structure of a tested function
 
 In release builds, the `#[live_prop_test]` attribute on a function does nothing. In debug builds, it wraps the function with tests, performing the following steps:
 1. For each test group attached to the function, decide whether to run those tests.
@@ -169,7 +176,11 @@ In release builds, the `#[live_prop_test]` attribute on a function does nothing.
 5. For each test group that is running, evaluate the postcondition expressions.
 6. Returns the stored result.
 
-String representations of arguments are created using `Debug` if a Debug impl is available for the argument type in the function scope; if there is no Debug impl available, they are written as "<no Debug impl>". Since specialization is not yet stable, we currently use a method-resolution trick to accomplish this fallback. This is somewhat more limited than specialization: in a generic function, if the argument type is a generic parameter, the Debug impl will only be available if the generic parameter specifically has Debug as a trait bound, regardless of whether the monomorphized type implements Debug.
+On each function call, if *any* tests are run, we always begin by generating String representations of the inputs. So if the inputs are large, the testing will take nontrivial time even if the conditions are trivial. This is a safe default, because – if a postcondition fails – we can always print out the original values of the failing inputs, even if there was interior mutability. (And as always, the test being expensive won't slow down the program much, only make the test run less often.) We may add a way to override this behavior in the future – please post an issue on the repository if you have a use case that needs it!
+
+String representations of arguments are created using `Debug` if a Debug impl is available for the argument type in the function scope; if there is no Debug impl available, they are written as `"<no Debug impl>"`. Since specialization is not yet stable, we currently use a method-resolution trick to accomplish this fallback. This is somewhat more limited than specialization: in a generic function, if the argument type is a generic parameter, the Debug impl will only be available if the generic parameter specifically has Debug as a trait bound, regardless of whether the monomorphized type implements Debug.
+
+## Tests on methods
 
 Due to proc-macro limitations, if you test a method inside an `impl` block (or a `trait` block), you must also add the attribute to the surrounding `impl` (or `trait`).
 
@@ -183,36 +194,7 @@ impl MyStruct {
 }
 ```
 
-[TODO: details about time measuring fallbacks, how to enable feature for wasm builds]
-
-# Recursion in tests
-
-If *evaluating a condition expression* calls a tested function, we never run the tests on the inner function. Thus, you can make tests like the following:
-
-```rust
-// Check commutativity
-#[live_prop_test(postcondition = "result == add(b, a)")]
-fn add(a, b) -> i32 {
-  a + b
-}
-```
-
-without worrying about infinite recursion (or even awkwardly large finite recursion).
-
-However, we do test recursive calls within the regular function body:
-
-```rust
-#[live_prop_test(postcondition = "result == (1..=input).product::<i32>()")]
-fn factorial(input: i32) -> i32 {
-  if input <= 1 {
-    1
-  } else {
-    input * factorial(input - 1)
-  }
-}
-```
-
-# Trait tests
+## Trait tests
 
 You can apply tests to trait methods:
 
@@ -255,6 +237,34 @@ impl MyClone for ChangesOnClone {
 ```
 
 This is a trade-off. In Rust, there's no way to automatically test all trait impls without changing the trait in some way. The `contracts` crate takes a stricter approach, where all impls of the trait are *required* to include the `#[contract_trait]` attribute. live-prop-test prefers to be more permissive, so that a library crate can test itself internally using live-prop-test, without adding any requirements for impls in downstream crates.
+
+
+## Recursion in tests
+
+If *evaluating a condition expression* calls a tested function, we never run the tests on the inner function. Thus, you can make tests like the following:
+
+```rust
+// Check commutativity
+#[live_prop_test(postcondition = "result == add(b, a)")]
+fn add(a, b) -> i32 {
+  a + b
+}
+```
+
+without worrying about infinite recursion (or even awkwardly large finite recursion).
+
+However, we do test recursive calls within the regular function body:
+
+```rust
+#[live_prop_test(postcondition = "result == (1..=input).product::<i32>()")]
+fn factorial(input: i32) -> i32 {
+  if input <= 1 {
+    1
+  } else {
+    input * factorial(input - 1)
+  }
+}
+```
 
 # Future plans
 

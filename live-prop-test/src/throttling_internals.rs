@@ -118,9 +118,9 @@ cfg_if::cfg_if! {
       START_TIME.with(ThreadTime::elapsed)
     }
   }
-  else if #[cfg(all(target_arch = "wasm32", not(feature="wasm-bindgen"), not(feature="stdweb")))] {
+  else if #[cfg(all(any(target_arch = "wasm32", target_arch = "asmjs"), not(feature="wasm-bindgen"), not(feature="stdweb")))] {
     fn default_thread_time() -> Duration {
-      panic!("live-prop-test doesn't have a default source of time for wasm builds. Specify a source of time by enabling either the `wasm-bindgen` or `stdweb` feature for live-prop-test.")
+      panic!("live-prop-test doesn't have a default source of time for `wasm32` or `asmjs` targets. Specify a source of time by enabling either the `wasm-bindgen` or `stdweb` feature for live-prop-test.")
     }
   }
   else {
