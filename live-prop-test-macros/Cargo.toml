@@ -23,3 +23,6 @@ proc-macro-error = "1.0.4"
 trybuild = "1.0"
 live-prop-test = { path = "../live-prop-test", version = "0.1" }
 version-sync = "0.9"
+
+[package.metadata.docs.rs]
+targets = []

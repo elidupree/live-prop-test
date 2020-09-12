@@ -27,3 +27,6 @@ instant = { version = "0.1", optional = true }
 [dev-dependencies]
 proptest = "0.9.5"
 version-sync = "0.9"
+
+[package.metadata.docs.rs]
+targets = []
