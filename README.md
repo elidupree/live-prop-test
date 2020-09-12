@@ -1,4 +1,4 @@
-# live-prop-test (work in progress)
+# live-prop-test
 
 Fearlessly write both cheap and expensive runtime tests (contracts) for Rust functions.
 
@@ -11,6 +11,8 @@ Do you love design-by-contract, but your contracts are too expensive to check ev
 live-prop-test brings these two things together:
 
 ```rust
+use live_prop_test::live_prop_test;
+
 #[live_prop_test(postcondition = "*number == old(*number) * 2")]
 fn double(number: &mut i32) {
   *number += *number;
@@ -44,12 +46,14 @@ live_prop_test::initialize_for_unit_tests();
 
 If live-prop-test is not initialized, it won't run any tests. Thus, if you're writing a library crate, you can freely add live-prop-test tests for your own internal testing, without any worry about exposing dependent crates to significant runtime cost (or unreliable panics, if your library has a bug), unless they explicitly opt in.
 
-On `wasm32` or `asmjs` targets, you also need to enable either the `wasm-bindgen` feature or the `stdweb` feature, to give live-prop-test a source of timing information:
+To run tests on `wasm32` or `asmjs` targets, you also need to enable either the `wasm-bindgen` feature or the `stdweb` feature, to give live-prop-test a source of timing information:
 
 ```toml
 [dependencies]
 live-prop-test = { version = "0.1.0", features = ["wasm-bindgen"] }
 ```
+
+(But once again, if you're writing a library crate, people can freely *use* your library on any target even if you didn't enable the features.)
 
 ## Example
 
@@ -69,7 +73,7 @@ fn exp2_expensive(exponent: i32) -> i32 {
 }
 ```
 
-Then we can explicitly test that they are equivalent. Of course, if we ran that test on every call of `exp2`, that would defeat the purpose of writing the optimized version. Even in debug builds, the expensive test might slow the program down too much to be practical. But with live-prop-test, we can add the test without worries.
+Then we can explicitly test that they are equivalent. Of course, if we ran that test on every call of `exp2`, that would defeat the purpose of writing the optimized version. Even in debug builds, the expensive test might slow the program down too much to be practical. But with live-prop-test, the test will only add a small amount of overhead.
 
 ```rust
 #[live_prop_test(postcondition = "result == exp2_expensive(exponent)")]
@@ -80,7 +84,7 @@ fn exp2(exponent: i32) -> i32 {
 
 Whoops! We get this error:
 
-```
+```none
 thread 'main' panicked at 'live-prop-test postcondition failure:
   Function: crate_name::exp2
   Arguments:
@@ -118,8 +122,8 @@ In this case, the generated regression test is valid code, so let's copy it dire
 Muliple conditions within the *same* attribute will either run as a group, or be skipped as a group:
 ```rust
 #[live_prop_test(
-  precondition = "*number > 0"
-  postcondition = "*number > old(*number)"
+  precondition = "*number > 0",
+  postcondition = "*number > old(*number)",
 )]
 fn double_positive_number(number: &mut u32) {
   *number *= 2
@@ -185,10 +189,14 @@ String representations of arguments are created using `Debug` if a Debug impl is
 Due to proc-macro limitations, if you test a method inside an `impl` block (or a `trait` block), you must also add the attribute to the surrounding `impl` (or `trait`).
 
 ```rust
+struct MyStruct {
+  field: i32,
+}
+
 #[live_prop_test] // if this line is removed, it's an error
 impl MyStruct {
-  #[live_prop_test(postcondition = "*result = old(self.field.clone())")]
-  fn get_field_mut(&mut self)->&mut FieldType {
+  #[live_prop_test(postcondition = "*result == old(self.field.clone())")]
+  fn get_field_mut(&mut self)->&mut i32 {
     &mut self.field
   }
 }
@@ -200,8 +208,8 @@ You can apply tests to trait methods:
 
 ```rust
 #[live_prop_test]
-trait MyClone: PartialEq {
-  #[live_prop_test(postcondition = "&result == input")]
+trait MyClone: PartialEq + Sized {
+  #[live_prop_test(postcondition = "&result == self")]
   fn clone(&self) -> Self;
 }
 ```
@@ -209,7 +217,7 @@ trait MyClone: PartialEq {
 By itself, this doesn't do anything. But later, you can tag a trait *impl* to use the tests:
 
 ```rust
-#[derive(PartialEq, Debug)];
+#[derive(PartialEq, Debug)]
 struct MyStruct;
 
 #[live_prop_test(use_trait_tests)]
@@ -226,6 +234,7 @@ An impl without `use_trait_tests` will not apply the tests:
 
 
 ```rust
+#[derive(PartialEq, Debug)]
 struct ChangesOnClone(i32);
 
 impl MyClone for ChangesOnClone {

@@ -464,7 +464,9 @@ fn live_prop_test_item_trait(
         let callback_return = ReturnType::Type(
           arrow,
           Box::new(parse_quote_spanned!(*default_span=>
-            (#original_return_type, ::live_prop_test::TestsFinisher)
+            // Note: finisher first, original return type second,
+            // just in case future Rust versions allow returning unsized types.
+            (::live_prop_test::TestsFinisher, #original_return_type)
           )),
         );
         test_signature
@@ -479,13 +481,13 @@ fn live_prop_test_item_trait(
             __LIVE_PROP_TEST_HISTORIES.with(move |__live_prop_test_histories| {
               let __live_prop_test_temporaries = (#(#setup_expressions,)*);
 
-              let (result, mut __live_prop_test_finisher) = (__live_prop_test_callback)(
+              let (mut __live_prop_test_finisher, result) = (__live_prop_test_callback)(
                 #(#parameter_name_exprs,)*
                 __live_prop_test_setup,
               );
 
               #(#finish_statements) *
-              (result, __live_prop_test_finisher)
+              (__live_prop_test_finisher, result)
             })
           }
         ));
@@ -783,14 +785,14 @@ fn function_replacements<T: Parse>(
       let finish_setup = analyzed_signature.finish_setup(parameter_placeholder_idents);
 
       quote_spanned!(*default_span=>
-        let (result, mut __live_prop_test_finisher) = Self::#test_method(
+        let (mut __live_prop_test_finisher, result) = Self::#test_method(
           #(#parameter_name_exprs,)*
           __live_prop_test_setup,
           |#(#parameter_placeholder_idents,)* __live_prop_test_setup| {
             #finish_setup
             (
+              __live_prop_test_finisher,
               #inner_function_call_syntax #turbofish(#(#parameter_placeholder_idents,)*),
-              __live_prop_test_finisher
             )
           }
         );
