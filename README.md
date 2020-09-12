@@ -2,7 +2,7 @@
 
 Fearlessly write both cheap and expensive runtime tests (contracts) for Rust functions.
 
-# Introduction
+## Introduction
 
 Do you love property-based testing, but your example values are hard to construct from nothing?
 
@@ -23,7 +23,7 @@ In debug builds, live-prop-test tests a *random sampling* of the calls to the te
 
 To keep future design space open, we don't currently make any specific API guarantees about how often the tests will be run. But generally, we aim to spend about 10% of the program's runtime in testing. (Or, if there aren't enough tests to take 10% of the runtime, to simply run them every time.)
 
-# Usage
+## Usage
 
 Put this in your Cargo.toml:
 
@@ -55,7 +55,7 @@ live-prop-test = { version = "0.1.0", features = ["wasm-bindgen"] }
 
 (But once again, if you're writing a library crate, people can freely *use* your library on any target even if you didn't enable the features.)
 
-## Example
+### Example
 
 Let's say you've written an optimized function with a mistake in it, like this:
 
@@ -114,10 +114,10 @@ In this case, the generated regression test is valid code, so let's copy it dire
 `live_prop_test::initialize_for_unit_tests()` disables time-based throttling within the test, making sure that all direct function calls are tested. (If a function with tests calls another function with tests, we don't currently make any API guarantees about whether the inner function will be tested. The current implementation tests all such calls, which could be a problem for expensive tests on calls with many iterations/branches. A future version of live-prop-test may test none of them, or test only a deterministic subset of them.)
 
 
-# Details
+## Details
 
 
-## Test grouping
+### Test grouping
 
 Muliple conditions within the *same* attribute will either run as a group, or be skipped as a group:
 ```rust
@@ -141,7 +141,7 @@ In the first example, the two conditions should be grouped together because they
 
 In the second example, the tests should be separate. This allows live-prop-test to recognize that the cheap test is cheap, so it can run the cheap test much more frequently than the expensive test. If they are grouped together, the cheap test can only run as often as the expensive test.
 
-## Precondition/postcondition expressions
+### Precondition/postcondition expressions
 
 Precondition and postcondition expressions can be any expression that evaluates to either `bool` or `Result<(), String>`. In the latter case, the `Err` value will be included in the live-prop-test failure message.
 
@@ -170,7 +170,7 @@ fn complex_postconditions(old: &SomeStruct, new: &SomeStruct)->Result<(), String
 }
 ``` 
 
-## Structure of a tested function
+### Structure of a tested function
 
 In release builds, the `#[live_prop_test]` attribute on a function does nothing. In debug builds, it wraps the function with tests, performing the following steps:
 1. For each test group attached to the function, decide whether to run those tests.
@@ -184,7 +184,7 @@ On each function call, if *any* tests are run, we always begin by generating Str
 
 String representations of arguments are created using `Debug` if a Debug impl is available for the argument type in the function scope; if there is no Debug impl available, they are written as `"<no Debug impl>"`. Since specialization is not yet stable, we currently use a method-resolution trick to accomplish this fallback. This is somewhat more limited than specialization: in a generic function, if the argument type is a generic parameter, the Debug impl will only be available if the generic parameter specifically has Debug as a trait bound, regardless of whether the monomorphized type implements Debug.
 
-## Tests on methods
+### Tests on methods
 
 Due to proc-macro limitations, if you test a method inside an `impl` block (or a `trait` block), you must also add the attribute to the surrounding `impl` (or `trait`).
 
@@ -202,7 +202,7 @@ impl MyStruct {
 }
 ```
 
-## Trait tests
+### Trait tests
 
 You can apply tests to trait methods:
 
@@ -248,7 +248,7 @@ impl MyClone for ChangesOnClone {
 This is a trade-off. In Rust, there's no way to automatically test all trait impls without changing the trait in some way. The `contracts` crate takes a stricter approach, where all impls of the trait are *required* to include the `#[contract_trait]` attribute. live-prop-test prefers to be more permissive, so that a library crate can test itself internally using live-prop-test, without adding any requirements for impls in downstream crates.
 
 
-## Recursion in tests
+### Recursion in tests
 
 If *evaluating a condition expression* calls a tested function, we never run the tests on the inner function. Thus, you can make tests like the following:
 
@@ -275,7 +275,7 @@ fn factorial(input: i32) -> i32 {
 }
 ```
 
-# Future plans
+## Future plans
 
 The following features are planned, but not yet designed/implemented:
 * Type invariants (here, a big open question is the API for specifying where/when you want them to be checked)
@@ -283,3 +283,20 @@ The following features are planned, but not yet designed/implemented:
 * Configuring individual tests to run in release mode and/or in dependencies that don't opt in
 * Optionally shrinking failing test inputs (although shrinking will always be opt-in, because we support tests for functions with side effects, and shrinking involves running the tested functions additional times, so "no shrinking" is the only safe default)
 * Optionally generating `#[test]` tests that try randomly generated values, like typical property-based testing libraries. (Right now, it's not *too* hard to write `quickcheck` or `proptest` tests that call `#[live_prop_test]` functions, but there are multiple conveniences that could be gained from making the feature more integrated.)
+
+## License
+
+Licensed under either of
+
+ * Apache License, Version 2.0
+   ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license
+   ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+## Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.

@@ -3,6 +3,7 @@ name = "live-prop-test-macros"
 version = "0.1.0"
 authors = ["Eli Dupree <vcs@elidupree.com>"]
 edition = "2018"
+license = "MIT OR Apache-2.0"
 description = "Proc macros for live-prop-test."
 repository = "https://github.com/elidupree/live-prop-test/"
 readme = "../README.md"
