@@ -718,10 +718,16 @@ fn function_replacements<T: Parse>(
       let self_ty = &containing_impl.self_ty;
       let (impl_generics, ty_generics, where_clause) = containing_impl.generics.split_for_impl();
 
-      if containing_impl.trait_.is_some() {
+      if let Some((traitbang, traitpath, _traitfor)) = &containing_impl.trait_ {
+        if let Some(traitbang) = traitbang {
+          abort!(
+            traitbang.span,
+            "it doesn't make sense to apply live-prop-test to a negative impl"
+          )
+        }
         (
           quote_spanned! {*default_span=>
-            trait __LivePropTestOriginalFunctionExt #impl_generics #where_clause {
+            trait __LivePropTestOriginalFunctionExt #impl_generics: #traitpath #where_clause {
               #inner_function_signature;
             }
             impl #impl_generics __LivePropTestOriginalFunctionExt #ty_generics for #self_ty #where_clause {

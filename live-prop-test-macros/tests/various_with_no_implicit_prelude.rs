@@ -322,9 +322,26 @@ trait FancierTestedTrait<T: ::std::fmt::Debug> {
   #[live_prop_test(postcondition = "false")]
   fn method_with_associated_argument(&self, _argument: Self::Associated);
   #[live_prop_test(postcondition = "false")]
-  fn method_with_associated_argument_and_default(
+  fn method_with_associated_argument_and_default(&self, _argument: Self::Associated) {}
+}
+
+#[live_prop_test(use_trait_tests)]
+impl FancierTestedTrait<i32> for () {
+  #[live_prop_test(postcondition = "false")]
+  fn method_with_impl_trait_argument(&self, _c: impl ::std::fmt::Debug) {}
+  #[live_prop_test(postcondition = "false")]
+  fn generic_method_with_impl_trait_argument<U: ::std::fmt::Debug>(
     &self,
-    _argument: <Self as FancierTestedTrait<T>>::Associated,
-  ) {
+    _b: U,
+    _c: impl ::std::fmt::Debug,
+  ) where
+    i32: ::std::clone::Clone,
+  {
   }
+
+  type Associated = ();
+  #[live_prop_test(postcondition = "false")]
+  fn method_with_associated_argument(&self, _argument: Self::Associated) {}
+  #[live_prop_test(postcondition = "false")]
+  fn method_with_associated_argument_and_default(&self, _argument: Self::Associated) {}
 }
