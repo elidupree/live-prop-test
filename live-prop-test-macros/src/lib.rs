@@ -754,7 +754,7 @@ fn function_replacements<T: Parse>(
       let (impl_impl_generics, _impl_ty_generics, where_clause) = impl_generics.split_for_impl();
       (
         quote_spanned! {*default_span=>
-          trait __LivePropTestOriginalFunctionExt #trait_impl_generics #where_clause {
+          trait __LivePropTestOriginalFunctionExt #trait_impl_generics: #trait_name #trait_ty_generics #where_clause {
             #inner_function_signature;
           }
           impl #impl_impl_generics __LivePropTestOriginalFunctionExt #trait_ty_generics for __LivePropTestSelfType #where_clause {

@@ -317,4 +317,14 @@ trait FancierTestedTrait<T: ::std::fmt::Debug> {
     T: ::std::clone::Clone,
   {
   }
+
+  type Associated;
+  #[live_prop_test(postcondition = "false")]
+  fn method_with_associated_argument(&self, _argument: Self::Associated);
+  #[live_prop_test(postcondition = "false")]
+  fn method_with_associated_argument_and_default(
+    &self,
+    _argument: <Self as FancierTestedTrait<T>>::Associated,
+  ) {
+  }
 }
