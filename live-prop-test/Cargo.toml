@@ -11,8 +11,8 @@ keywords = ["property", "testing", "contracts"]
 categories = ["development-tools", "development-tools::testing"]
 
 [features]
-wasm-bindgen = ["instant/wasm-bindgen"]
-stdweb = ["instant/stdweb"]
+wasm-bindgen = ["instant/wasm-bindgen", "getrandom/js"]
+stdweb = ["instant/stdweb", "getrandom/js"]
 
 [dependencies]
 live-prop-test-macros = { path = "../live-prop-test-macros", version = "0.1.0" }
@@ -23,6 +23,7 @@ once_cell = "1.3"
 cpu-time = "1.0"
 cfg-if = "0.1.10"
 instant = { version = "0.1", optional = true }
+getrandom = { version = "0.2", optional = true }
 
 [dev-dependencies]
 proptest = "0.9.5"
