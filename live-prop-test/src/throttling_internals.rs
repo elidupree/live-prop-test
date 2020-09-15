@@ -1,6 +1,6 @@
 use crate::{ThrottlingBehavior, TimeSources};
 use ordered_float::OrderedFloat;
-use rand::random;
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -54,6 +54,18 @@ pub(crate) fn global_update_if_needed() {
   }
 }
 
+fn random() -> f64 {
+  thread_local! {
+    static RNG: RefCell<SmallRng> = {
+      let mut seed = <SmallRng as SeedableRng>::Seed::default();
+      // note: ignore errors; it's not that bad if we end up being technically deterministic.
+      let _ = getrandom::getrandom(seed.as_mut());
+      RefCell::new(SmallRng::from_seed(seed))
+    };
+  }
+  RNG.with(|rng| rng.borrow_mut().gen())
+}
+
 impl TestHistoryInner {
   pub(crate) fn new() -> TestHistoryInner {
     let shared = Rc::new(TestHistoryShared {
@@ -89,7 +101,7 @@ impl TestHistoryInner {
     // auto-pass if we have less than that much debt. Also allow slightly more
     // than that much debt as a leeway for timing issues.
     let result = shared.debt < SECONDS_PER_UPDATE * FRACTION_TO_USE_FOR_TESTING * 2.0
-      || random::<f64>() < probability;
+      || random() < probability;
 
     if !result {
       // if result is true, this update will be done when the test finishes,
