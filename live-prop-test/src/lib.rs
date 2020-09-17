@@ -623,17 +623,21 @@ See the [crate-level documentation](index.html) for examples.
 */
 #[macro_export]
 macro_rules! lpt_assert {
-    ($cond:expr) => {
-        $crate::lpt_assert!($cond, concat!("assertion failed: ", stringify!($cond)))
-    };
+  ($cond:expr) => {{
+    $crate::lpt_assert!($cond, concat!("assertion failed: ", stringify!($cond)))
+  }};
 
-    ($cond:expr, $($fmt:tt)*) => {
-        if !$cond {
-            let message = ::std::format!($($fmt)*);
-            let message = ::std::format!("{} at {}:{}", message, file!(), line!());
-            return ::std::result::Result::Err(message);
-        }
-    };
+  ($cond:expr,) => {{
+    $crate::lpt_assert!($cond)
+  }};
+
+  ($cond:expr, $($fmt:tt)*) => {{
+    if !$cond {
+      let message = ::std::format!($($fmt)*);
+      let message = ::std::format!("{} at {}:{}", message, file!(), line!());
+      return ::std::result::Result::Err(message);
+    }
+  }};
 }
 
 /**
@@ -645,26 +649,29 @@ See the [crate-level documentation](index.html) for examples.
 */
 #[macro_export]
 macro_rules! lpt_assert_eq {
-    ($left:expr, $right:expr) => {{
-        let left = $left;
-        let right = $right;
-        $crate::lpt_assert!(
-            left == right,
-            "assertion failed: `(left == right)` \
-             \n  left: `{:?}`,\n right: `{:?}`",
-            left, right);
-    }};
-
-    ($left:expr, $right:expr, $fmt:tt $($args:tt)*) => {{
-        let left = $left;
-        let right = $right;
-        $crate::lpt_assert!(
-            left == right,
-            concat!(
-                "assertion failed: `(left == right)` \
-                 \n  left: `{:?}`, \n right: `{:?}`: ", $fmt),
-            left, right $($args)*);
-    }};
+  ($left:expr, $right:expr) => {{
+    match (&$left, &$right) {
+        (left_val, right_val) => {
+          $crate::lpt_assert!(*left_val == *right_val,
+            r#"assertion failed: `(left == right)`
+  left: `{:?}`,
+ right: `{:?}`"#, left_val, right_val);
+      }
+    }
+  }};
+  ($left:expr, $right:expr,) => {{
+    $crate::lpt_assert_eq!($left, $right)
+  }};
+  ($left:expr, $right:expr, $($arg:tt)+) => {{
+    match (&$left, &$right) {
+        (left_val, right_val) => {
+          $crate::lpt_assert!(*left_val == *right_val,
+            r#"assertion failed: `(left == right)`
+  left: `{:?}`,
+ right: `{:?}`: {}"#, left_val, right_val, ::std::format_args!($($arg)+));
+      }
+    }
+  }};
 }
 
 /**
@@ -676,24 +683,29 @@ See the [crate-level documentation](index.html) for examples.
 */
 #[macro_export]
 macro_rules! lpt_assert_ne {
-    ($left:expr, $right:expr) => {{
-        let left = $left;
-        let right = $right;
-        lpt_assert!(
-            left != right,
-            "assertion failed: `(left != right)`\
-             \n  left: `{:?}`,\n right: `{:?}`",
-                     left, right);
-    }};
-
-    ($left:expr, $right:expr, $fmt:tt $($args:tt)*) => {{
-        let left = $left;
-        let right = $right;
-        lpt_assert!(left != right, concat!(
-            "assertion failed: `(left != right)`\
-             \n  left: `{:?}`,\n right: `{:?}`: ", $fmt),
-                     left, right $($args)*);
-    }};
+  ($left:expr, $right:expr) => {{
+    match (&$left, &$right) {
+        (left_val, right_val) => {
+          $crate::lpt_assert!(*left_val != *right_val,
+            r#"assertion failed: `(left != right)`
+  left: `{:?}`,
+ right: `{:?}`"#, left_val, right_val);
+      }
+    }
+  }};
+  ($left:expr, $right:expr,) => {{
+    $crate::lpt_assert_ne!($left, $right)
+  }};
+  ($left:expr, $right:expr, $($arg:tt)+) => {{
+    match (&$left, &$right) {
+        (left_val, right_val) => {
+          $crate::lpt_assert!(*left_val != *right_val,
+            r#"assertion failed: `(left != right)`
+  left: `{:?}`,
+ right: `{:?}`: {}"#, left_val, right_val, ::std::format_args!($($arg)+));
+      }
+    }
+  }};
 }
 
 #[doc(hidden)]
