@@ -698,7 +698,7 @@ fn function_replacements<T: Parse>(
   if let ContainingImpl::None = containing_impl {
     // TODO: also catch `Self`
     if let Some(receiver) = signature.receiver() {
-      abort!(receiver.span(), "when using live-prop-test on methods with a `self` parameter, you must also put the #[live_prop_test] attribute on the containing impl")
+      abort!(receiver.span(), "when using live-prop-test on methods inside an `impl`, you must also put the #[live_prop_test] attribute on the containing impl")
     }
   };
   let inner_function_signature = Signature {
