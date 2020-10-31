@@ -364,4 +364,4 @@ fn tested_trait_is_object_safe() {
   let trait_box: ::std::boxed::Box<dyn ObjectSafeTestedTrait> = ::std::boxed::Box::new(());
   trait_box.method();
 }
- */
+*/
