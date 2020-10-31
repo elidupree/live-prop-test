@@ -385,6 +385,59 @@ enum ContainingImpl<'a> {
   Impl(&'a ItemImpl),
   Trait(&'a ItemTrait),
 }
+
+fn test_callback_stuff(
+  default_span: &Span,
+  signature: &Signature,
+) -> (Signature, Vec<Type>, ReturnType) {
+  let mut normalized_signature = (*signature).clone();
+  replace_impl_trait_in_argument_position(&mut normalized_signature);
+
+  let (arrow, original_return_type) = match &signature.output {
+    ReturnType::Default => (
+      parse_quote_spanned!(*default_span=> ->),
+      parse_quote_spanned!(*default_span=> ()),
+    ),
+    ReturnType::Type(arrow, ty) => (*arrow, (*ty).clone()),
+  };
+
+  let mut callback_argument_types: Vec<Type> = normalized_signature
+    .inputs
+    .iter()
+    .map(|input| match input {
+      FnArg::Receiver(receiver) => {
+        if receiver.reference.is_some() {
+          if receiver.mutability.is_some() {
+            parse_quote_spanned!(*default_span=> &mut Self)
+          } else {
+            parse_quote_spanned!(*default_span=> & Self)
+          }
+        } else {
+          parse_quote_spanned!(*default_span=> Self)
+        }
+      }
+      FnArg::Typed(PatType { ty, .. }) => (**ty).clone(),
+    })
+    .collect();
+  callback_argument_types.push(parse_quote_spanned!(*default_span=>
+    ::live_prop_test::TestsSetup
+  ));
+  let callback_return = ReturnType::Type(
+    arrow,
+    Box::new(parse_quote_spanned!(*default_span=>
+      // Note: finisher first, original return type second,
+      // just in case future Rust versions allow returning unsized types.
+      (::live_prop_test::TestsFinisher, #original_return_type)
+    )),
+  );
+
+  (
+    normalized_signature,
+    callback_argument_types,
+    callback_return,
+  )
+}
+
 fn live_prop_test_item_trait(
   mut item_trait: ItemTrait,
   captured_attributes: Vec<LivePropTestAttribute>,
@@ -421,20 +474,11 @@ fn live_prop_test_item_trait(
           histories_declaration,
         } = &analyzed_attributes;
 
-        let mut normalized_signature = (*signature).clone();
-        replace_impl_trait_in_argument_position(&mut normalized_signature);
-
+        let (normalized_signature, callback_argument_types, callback_return) =
+          test_callback_stuff(default_span, signature);
         let mut test_signature = Signature {
           ident: format_ident!("__live_prop_test_{}", signature.ident),
-          ..normalized_signature.clone()
-        };
-
-        let (arrow, original_return_type) = match &signature.output {
-          ReturnType::Default => (
-            parse_quote_spanned!(*default_span=> ->),
-            parse_quote_spanned!(*default_span=> ()),
-          ),
-          ReturnType::Type(arrow, ty) => (*arrow, (*ty).clone()),
+          ..normalized_signature
         };
 
         test_signature
@@ -442,49 +486,20 @@ fn live_prop_test_item_trait(
           .push(parse_quote_spanned!(*default_span=>
             mut __live_prop_test_setup: ::live_prop_test::TestsSetup
           ));
-
-        let mut callback_argument_types: Vec<Type> = normalized_signature
-          .inputs
-          .iter()
-          .map(|input| match input {
-            FnArg::Receiver(receiver) => {
-              if receiver.reference.is_some() {
-                if receiver.mutability.is_some() {
-                  parse_quote_spanned!(*default_span=> &mut Self)
-                } else {
-                  parse_quote_spanned!(*default_span=> & Self)
-                }
-              } else {
-                parse_quote_spanned!(*default_span=> Self)
-              }
-            }
-            FnArg::Typed(PatType { ty, .. }) => (**ty).clone(),
-          })
-          .collect();
-        callback_argument_types.push(parse_quote_spanned!(*default_span=>
-          ::live_prop_test::TestsSetup
-        ));
-        let callback_return = ReturnType::Type(
-          arrow,
-          Box::new(parse_quote_spanned!(*default_span=>
-            // Note: finisher first, original return type second,
-            // just in case future Rust versions allow returning unsized types.
-            (::live_prop_test::TestsFinisher, #original_return_type)
-          )),
-        );
         test_signature
           .inputs
           .push(parse_quote_spanned!(*default_span=>
-            __live_prop_test_callback: impl ::std::ops::FnOnce(#(#callback_argument_types,)*) #callback_return
+            __live_prop_test_callback: ::std::boxed::Box<dyn ::std::any::Any>
           ));
         test_signature.output = callback_return.clone();
         new_items.push(parse_quote_spanned!(*default_span=>
           #test_signature {
             #histories_declaration
             __LIVE_PROP_TEST_HISTORIES.with(move |__live_prop_test_histories| {
+              let __live_prop_test_callback: ::std::boxed::Box<::std::boxed::Box<dyn ::std::ops::FnOnce(#(#callback_argument_types,)*) #callback_return>> = __live_prop_test_callback.downcast().unwrap();
               let __live_prop_test_temporaries = (#(#setup_expressions,)*);
 
-              let (mut __live_prop_test_finisher, result) = (__live_prop_test_callback)(
+              let (mut __live_prop_test_finisher, result) = (**__live_prop_test_callback)(
                 #(#parameter_name_exprs,)*
                 __live_prop_test_setup,
               );
@@ -775,6 +790,9 @@ fn function_replacements<T: Parse>(
     }
   };
 
+  let (normalized_signature, callback_argument_types, callback_return) =
+    test_callback_stuff(default_span, signature);
+
   let (_impl_generics, ty_generics, _where_clause) = signature.generics.split_for_impl();
   let turbofish = if has_impl_trait_in_argument_position(signature) {
     None
@@ -794,16 +812,19 @@ fn function_replacements<T: Parse>(
       let finish_setup = analyzed_signature.finish_setup(parameter_placeholder_idents);
 
       quote_spanned!(*default_span=>
-        let (mut __live_prop_test_finisher, result) = Self::#test_method(
-          #(#parameter_name_exprs,)*
-          __live_prop_test_setup,
-          |#(#parameter_placeholder_idents,)* __live_prop_test_setup| {
+        let __live_prop_test_callback = |#(#parameter_placeholder_idents,)* __live_prop_test_setup| {
             #finish_setup
             (
               __live_prop_test_finisher,
               #inner_function_call_syntax #turbofish(#(#parameter_placeholder_idents,)*),
             )
-          }
+          };
+        let __live_prop_test_callback: ::std::boxed::Box<dyn ::std::ops::FnOnce(#(#callback_argument_types,)*) #callback_return> = ::std::boxed::Box::new(__live_prop_test_callback);
+        let __live_prop_test_callback: ::std::boxed::Box<dyn ::std::any::Any> = ::std::boxed::Box::new(__live_prop_test_callback);
+        let (mut __live_prop_test_finisher, result) = Self::#test_method(
+          #(#parameter_name_exprs,)*
+          __live_prop_test_setup,
+          __live_prop_test_callback,
         );
       )
     }
@@ -845,7 +866,7 @@ fn function_replacements<T: Parse>(
     parse_quote_spanned!(*default_span=>
       #[cfg(debug_assertions)]
       #(#non_lpt_attributes) *
-      #vis_defaultness #signature
+      #vis_defaultness #normalized_signature
       {
         #inner_function_definition
         #display_meta_item

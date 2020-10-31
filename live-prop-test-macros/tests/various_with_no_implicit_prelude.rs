@@ -345,3 +345,22 @@ impl FancierTestedTrait<i32> for () {
   #[live_prop_test(postcondition = "false")]
   fn method_with_associated_argument_and_default(&self, _argument: Self::Associated) {}
 }
+/*
+#[live_prop_test]
+trait ObjectSafeTestedTrait {
+  #[live_prop_test(postcondition = "false")]
+  fn method(&self) {}
+}
+
+#[live_prop_test(use_trait_tests)]
+impl ObjectSafeTestedTrait for () {
+  fn method(&self) {}
+}
+
+#[test]
+#[should_panic(expected = "postcondition")]
+fn tested_trait_is_object_safe() {
+  let trait_box: ::std::boxed::Box<dyn ObjectSafeTestedTrait> = ::std::boxed::Box::new(());
+  trait_box.method();
+}
+*/
