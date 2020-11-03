@@ -365,3 +365,22 @@ fn tested_trait_is_object_safe() {
   trait_box.method();
 }
 */
+
+fn disparate_types_equal(i: i32, u: u32) -> bool {
+  i as i64 == u as i64
+}
+#[live_prop_test(postcondition = "disparate_types_equal(old(i), old(u))")]
+fn multiple_olds(i: i32, u: u32) {
+  let _ = (i, u);
+}
+
+#[test]
+fn multiple_olds_pass() {
+  multiple_olds(3, 3);
+}
+
+#[test]
+#[should_panic(expected = "postcondition")]
+fn multiple_olds_fail() {
+  multiple_olds(1, 4);
+}

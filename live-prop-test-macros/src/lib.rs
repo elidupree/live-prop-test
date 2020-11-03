@@ -996,6 +996,7 @@ impl TestAttribute {
             &format!("__live_prop_test_old_value_{}", self.next_index),
             expr.span(),
           );
+          self.next_index += 1;
           *expr = parse_quote! (#old_identifier);
           self.old_identifiers.push(old_identifier);
           self.old_expressions.push(old_expression);
