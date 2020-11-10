@@ -384,3 +384,16 @@ fn multiple_olds_pass() {
 fn multiple_olds_fail() {
   multiple_olds(1, 4);
 }
+
+#[live_prop_test]
+#[allow(unused_mut)]
+trait PatternArgumentBindingsTrait: ::std::marker::Sized {
+  #[live_prop_test(postcondition = "false")]
+  fn method(mut self, mut _b: i32, mut _e @ _: ()) {}
+}
+
+#[live_prop_test(use_trait_tests)]
+#[allow(unused_mut)]
+impl PatternArgumentBindingsTrait for () {
+  fn method(mut self, mut _b: i32, mut _e @ _: ()) {}
+}

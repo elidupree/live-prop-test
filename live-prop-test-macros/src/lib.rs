@@ -163,7 +163,11 @@ fn analyzed_parameters<'a>(
           };
           let is_mutable_reference = regression_prefix == "&mut ";
           match &*pat_type.pat {
-            Pat::Ident(PatIdent { ident, .. }) => {
+            Pat::Ident(PatIdent {
+              ident,
+              by_ref: None,
+              ..
+            }) => {
               AnalyzedParameter {
                 //original: original.clone(),
                 name_expr: parse_quote!(#ident),
@@ -174,7 +178,7 @@ fn analyzed_parameters<'a>(
             }
             pat => abort!(
               pat.span(),
-              "live-prop-test only supports function arguments that are bound as an identifier"
+              "live-prop-test only supports function arguments that are bound by-value as an identifier"
             ),
           }
         }
@@ -707,6 +711,29 @@ fn function_replacements<T: Parse>(
   };
   let inner_function_name = &inner_function_signature.ident;
 
+  // Due to issue #35203 (patterns_in_fns_without_body), we have to strip away extra info
+  // from the signature that's used for the trait declaration
+  let mut original_function_ext_trait_method_signature: Signature =
+    inner_function_signature.clone();
+  for argument in original_function_ext_trait_method_signature
+    .inputs
+    .iter_mut()
+  {
+    match argument {
+      FnArg::Receiver(receiver) => {
+        if receiver.reference.is_none() {
+          receiver.mutability = None;
+        }
+      }
+      FnArg::Typed(typed) => {
+        if let Pat::Ident(pat_ident) = &mut *typed.pat {
+          pat_ident.mutability = None;
+          pat_ident.subpat = None;
+        }
+      }
+    }
+  }
+
   let inner_function_definition = quote! {
     // deliberately omit attrs;
     // naturally, some attributes must affect the inner function,
@@ -731,7 +758,7 @@ fn function_replacements<T: Parse>(
         (
           quote_spanned! {*default_span=>
             trait __LivePropTestOriginalFunctionExt #impl_generics: #traitpath #where_clause {
-              #inner_function_signature;
+              #original_function_ext_trait_method_signature;
             }
             impl #impl_generics __LivePropTestOriginalFunctionExt #ty_generics for #self_ty #where_clause {
               #inner_function_definition
@@ -764,7 +791,7 @@ fn function_replacements<T: Parse>(
       (
         quote_spanned! {*default_span=>
           trait __LivePropTestOriginalFunctionExt #trait_impl_generics: #trait_name #trait_ty_generics #where_clause {
-            #inner_function_signature;
+            #original_function_ext_trait_method_signature;
           }
           impl #impl_impl_generics __LivePropTestOriginalFunctionExt #trait_ty_generics for __LivePropTestSelfType #where_clause {
             #inner_function_definition
