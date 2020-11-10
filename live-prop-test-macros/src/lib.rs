@@ -25,7 +25,7 @@ use syn::{
   ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Path, ReturnType, Signature,
   Stmt, Token, TraitItem, TraitItemMethod, Type,
 };
-use syn::{Block, Index, ItemConst, PatType, TypeImplTrait, TypeParamBound};
+use syn::{Block, Index, ItemConst, PatType, PathSegment, TypeImplTrait, TypeParamBound};
 
 /// The whole point.
 ///
@@ -700,10 +700,20 @@ fn function_replacements<T: Parse>(
   // };
 
   if let ContainingImpl::None = containing_impl {
-    // TODO: also catch `Self`
     if let Some(receiver) = signature.receiver() {
       abort!(receiver.span(), "when using live-prop-test on methods inside an `impl`, you must also put the #[live_prop_test] attribute on the containing impl")
     }
+
+    struct SelfTypeVisitor;
+    impl<'a> Visit<'a> for SelfTypeVisitor {
+      fn visit_path_segment(&mut self, segment: &'a PathSegment) {
+        if segment.ident == "Self" {
+          abort!(segment.ident.span(), "when using live-prop-test on methods inside an `impl`, you must also put the #[live_prop_test] attribute on the containing impl")
+        }
+      }
+    }
+
+    SelfTypeVisitor.visit_signature(signature);
   };
   let inner_function_signature = Signature {
     ident: format_ident!("__live_prop_test_original_function_for_{}", signature.ident),
