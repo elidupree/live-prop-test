@@ -25,7 +25,7 @@ use syn::{
   ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Path, ReturnType, Signature,
   Stmt, Token, TraitItem, TraitItemMethod, Type,
 };
-use syn::{Block, Index, ItemConst, PatType, PathSegment, TypeImplTrait, TypeParamBound};
+use syn::{Block, Index, ItemConst, PathSegment, TypeImplTrait};
 
 /// The whole point.
 ///
@@ -198,7 +198,7 @@ struct AnalyzedSignature<'a> {
   parameter_name_exprs: Vec<Expr>,
   //all_parameter_names: Vec<String>,
   mutable_reference_parameter_names: Vec<String>,
-  parameter_placeholder_idents: Vec<Ident>,
+  //parameter_placeholder_idents: Vec<Ident>,
 }
 impl<'a> AnalyzedSignature<'a> {
   fn new(signature: &'a Signature) -> Self {
@@ -234,16 +234,16 @@ impl<'a> AnalyzedSignature<'a> {
       .map(|a| a.name_string.clone())
       .collect();
     //let all_parameter_names = analyzed.iter().map(|a| a.name_string.clone()).collect();
-    let parameter_placeholder_idents: Vec<_> = parameter_name_exprs
-      .iter()
-      .enumerate()
-      .map(|(index, expr)| {
-        Ident::new(
-          &format!("__live_prop_test_parameter_{}", index),
-          expr.span(),
-        )
-      })
-      .collect();
+    // let parameter_placeholder_idents: Vec<_> = parameter_name_exprs
+    //   .iter()
+    //   .enumerate()
+    //   .map(|(index, expr)| {
+    //     Ident::new(
+    //       &format!("__live_prop_test_parameter_{}", index),
+    //       expr.span(),
+    //     )
+    //   })
+    //   .collect();
 
     let default_span = signature.span();
     // let return_type: Type = match return_type {
@@ -277,7 +277,7 @@ impl<'a> AnalyzedSignature<'a> {
       parameter_name_exprs,
       //all_parameter_names,
       mutable_reference_parameter_names,
-      parameter_placeholder_idents,
+      //parameter_placeholder_idents,
       num_parameters,
       default_span,
     }
@@ -410,6 +410,7 @@ fn live_prop_test_item_trait(
           signature,
           parameter_name_exprs,
           mutable_reference_parameter_names,
+          display_meta_item,
           ..
         } = &analyzed_signature;
         let analyzed_attributes = AnalyzedFunctionAttributes::new(
@@ -425,12 +426,18 @@ fn live_prop_test_item_trait(
           histories_declaration,
         } = &analyzed_attributes;
 
-        let mut normalized_signature = (*signature).clone();
-        replace_impl_trait_in_argument_position(&mut normalized_signature);
+        //let mut normalized_signature = (*signature).clone();
+        //replace_impl_trait_in_argument_position(&mut normalized_signature);
+
+        let original_method_name = format_ident!("__live_prop_test_original_{}", signature.ident);
+        let original_signature = Signature {
+          ident: original_method_name.clone(),
+          ..signature_with_patterns_stripped(signature)
+        };
 
         let mut test_signature = Signature {
-          ident: format_ident!("__live_prop_test_{}", signature.ident),
-          ..normalized_signature.clone()
+          ident: format_ident!("__live_prop_test_tests_for_{}", signature.ident),
+          ..(*signature).clone()
         };
 
         let (arrow, original_return_type) = match &signature.output {
@@ -447,60 +454,47 @@ fn live_prop_test_item_trait(
             mut __live_prop_test_setup: ::live_prop_test::TestsSetup
           ));
 
-        let mut callback_argument_types: Vec<Type> = normalized_signature
-          .inputs
-          .iter()
-          .map(|input| match input {
-            FnArg::Receiver(receiver) => {
-              if receiver.reference.is_some() {
-                if receiver.mutability.is_some() {
-                  parse_quote_spanned!(*default_span=> &mut Self)
-                } else {
-                  parse_quote_spanned!(*default_span=> & Self)
-                }
-              } else {
-                parse_quote_spanned!(*default_span=> Self)
-              }
-            }
-            FnArg::Typed(PatType { ty, .. }) => (**ty).clone(),
-          })
-          .collect();
-        callback_argument_types.push(parse_quote_spanned!(*default_span=>
-          ::live_prop_test::TestsSetup
-        ));
-        let callback_return = ReturnType::Type(
+        let num_parameters = parameter_name_exprs.len();
+        test_signature.output = ReturnType::Type(
           arrow,
           Box::new(parse_quote_spanned!(*default_span=>
             // Note: finisher first, original return type second,
             // just in case future Rust versions allow returning unsized types.
-            (::live_prop_test::TestsFinisher, #original_return_type)
+            (::live_prop_test::TestsFinisher, ::std::option::Option<[::std::string::String; #num_parameters]>, #original_return_type)
           )),
         );
-        test_signature
-          .inputs
-          .push(parse_quote_spanned!(*default_span=>
-            __live_prop_test_callback: impl ::std::ops::FnOnce(#(#callback_argument_types,)*) #callback_return
-          ));
-        test_signature.output = callback_return.clone();
+
+        let finish_setup = analyzed_signature.finish_setup(parameter_name_exprs);
+        let turbofish = turbofish_for_signature(signature);
         new_items.push(parse_quote_spanned!(*default_span=>
           #test_signature {
+            #display_meta_item
             #histories_declaration
             __LIVE_PROP_TEST_HISTORIES.with(move |__live_prop_test_histories| {
               let __live_prop_test_temporaries = (#(#setup_expressions,)*);
 
-              let (mut __live_prop_test_finisher, result) = (__live_prop_test_callback)(
-                #(#parameter_name_exprs,)*
-                __live_prop_test_setup,
-              );
+              let mut __live_prop_test_parameter_value_representations = ::std::option::Option::None;
+              #finish_setup
+              let result = Self::#original_method_name #turbofish(#(#parameter_name_exprs,)*);
 
               #(#finish_statements) *
-              (__live_prop_test_finisher, result)
+              (__live_prop_test_finisher, __live_prop_test_parameter_value_representations, result)
             })
           }
         ));
+        let original_method: TraitItem = parse_quote_spanned!(*default_span=> #original_signature {
+          ::std::panic!("Called live_prop_test placeholder 'original' method; this is probably a bug in live_prop_test")
+        });
         if analyzed_attributes.is_empty() {
+          // No tests; use original declaration
+          // note that we DON'T skip the above code, because an impl with `use_trait_tests`
+          // doesn't KNOW there aren't any tests, so it must be allowed to call into
+          // the testing method unconditionally
           new_items.push(TraitItem::Method(method));
+          new_items.push(original_method);
         } else if let Some(default) = method.default.as_ref() {
+          // There's a default implementation, which we need to apply tests to.
+          // This declares the "original" version, so we don't need to declare it here.
           let replacement = function_replacements(
             &method.attrs,
             None,
@@ -516,7 +510,9 @@ fn live_prop_test_item_trait(
             new_items.push(TraitItem::Method(method));
           }
         } else {
+          // There are tests but no default implementation; no need to change the signature
           new_items.push(TraitItem::Method(method));
+          new_items.push(original_method);
         };
       }
       _ => new_items.push(item.clone()),
@@ -646,7 +642,7 @@ fn function_replacements<T: Parse>(
     //return_type,
     parameter_name_exprs,
     //all_parameter_names,
-    parameter_placeholder_idents,
+    //parameter_placeholder_idents,
     ..
   } = &analyzed_signature;
 
@@ -716,33 +712,15 @@ fn function_replacements<T: Parse>(
     SelfTypeVisitor.visit_signature(signature);
   };
   let inner_function_signature = Signature {
-    ident: format_ident!("__live_prop_test_original_function_for_{}", signature.ident),
+    ident: format_ident!("__live_prop_test_original_{}", signature.ident),
     ..(*signature).clone()
   };
   let inner_function_name = &inner_function_signature.ident;
 
   // Due to issue #35203 (patterns_in_fns_without_body), we have to strip away extra info
   // from the signature that's used for the trait declaration
-  let mut original_function_ext_trait_method_signature: Signature =
-    inner_function_signature.clone();
-  for argument in original_function_ext_trait_method_signature
-    .inputs
-    .iter_mut()
-  {
-    match argument {
-      FnArg::Receiver(receiver) => {
-        if receiver.reference.is_none() {
-          receiver.mutability = None;
-        }
-      }
-      FnArg::Typed(typed) => {
-        if let Pat::Ident(pat_ident) = &mut *typed.pat {
-          pat_ident.mutability = None;
-          pat_ident.subpat = None;
-        }
-      }
-    }
-  }
+  let original_function_ext_trait_method_signature: Signature =
+    signature_with_patterns_stripped(&inner_function_signature);
 
   let inner_function_definition = quote! {
     // deliberately omit attrs;
@@ -752,9 +730,9 @@ fn function_replacements<T: Parse>(
     #vis_defaultness #inner_function_signature
     #block
   };
-  let (inner_function_definition, inner_function_call_syntax) = match containing_impl {
-    ContainingImpl::None => (inner_function_definition, quote!(#inner_function_name)),
-    ContainingImpl::Impl(containing_impl) => {
+  let (inner_function_definition, inner_function_call_syntax) = match (containing_impl, use_trait_tests) {
+    (ContainingImpl::None, false) => (inner_function_definition, quote!(#inner_function_name)),
+    (ContainingImpl::Impl(containing_impl), false) => {
       let self_ty = &containing_impl.self_ty;
       let (impl_generics, ty_generics, where_clause) = containing_impl.generics.split_for_impl();
 
@@ -787,37 +765,11 @@ fn function_replacements<T: Parse>(
         )
       }
     }
-    ContainingImpl::Trait(containing_trait) => {
-      let trait_name = &containing_trait.ident;
-      let (trait_impl_generics, trait_ty_generics, _where_clause) =
-        containing_trait.generics.split_for_impl();
-      let mut impl_generics = containing_trait.generics.clone();
-      impl_generics
-        .params
-        .push(parse_quote_spanned!(*default_span=>
-          __LivePropTestSelfType: #trait_name #trait_ty_generics + ?::std::marker::Sized
-        ));
-      let (impl_impl_generics, _impl_ty_generics, where_clause) = impl_generics.split_for_impl();
-      (
-        quote_spanned! {*default_span=>
-          trait __LivePropTestOriginalFunctionExt #trait_impl_generics: #trait_name #trait_ty_generics #where_clause {
-            #original_function_ext_trait_method_signature;
-          }
-          impl #impl_impl_generics __LivePropTestOriginalFunctionExt #trait_ty_generics for __LivePropTestSelfType #where_clause {
-            #inner_function_definition
-          }
-        },
-        quote_spanned!(*default_span=> <Self as __LivePropTestOriginalFunctionExt #trait_ty_generics>::#inner_function_name),
-      )
-    }
+    (ContainingImpl::Trait(_), false) => abort!(default_span, "live_prop_test internal error: shouldn't be generating code for a trait without specifying use_trait_tests"),
+    (_, true) => (quote!(), quote!())
   };
 
-  let (_impl_generics, ty_generics, _where_clause) = signature.generics.split_for_impl();
-  let turbofish = if has_impl_trait_in_argument_position(signature) {
-    None
-  } else {
-    Some(ty_generics.as_turbofish())
-  };
+  let turbofish = turbofish_for_signature(signature);
   let finish_setup_and_call_inner = match use_trait_tests {
     false => {
       let finish_setup = analyzed_signature.finish_setup(parameter_name_exprs);
@@ -827,21 +779,14 @@ fn function_replacements<T: Parse>(
       )
     }
     true => {
-      let test_method = format_ident!("__live_prop_test_{}", signature.ident);
-      let finish_setup = analyzed_signature.finish_setup(parameter_placeholder_idents);
+      let test_method = format_ident!("__live_prop_test_tests_for_{}", signature.ident);
 
       quote_spanned!(*default_span=>
-        let (mut __live_prop_test_finisher, result) = Self::#test_method(
+        let (mut __live_prop_test_finisher, __live_prop_test_parameter_value_representations_temp, result) = Self::#test_method #turbofish(
           #(#parameter_name_exprs,)*
           __live_prop_test_setup,
-          |#(#parameter_placeholder_idents,)* __live_prop_test_setup| {
-            #finish_setup
-            (
-              __live_prop_test_finisher,
-              #inner_function_call_syntax #turbofish(#(#parameter_placeholder_idents,)*),
-            )
-          }
         );
+        __live_prop_test_parameter_value_representations = __live_prop_test_parameter_value_representations_temp;
       )
     }
   };
@@ -871,7 +816,7 @@ fn function_replacements<T: Parse>(
       })
     ),
   };
-  let result = vec![
+  let mut result = vec![
     parse_quote_spanned!(*default_span=>
       #[cfg(not(debug_assertions))]
       // note: we can't just say #function because we do still need to purge any live_prop_test config attributes from the arguments
@@ -890,6 +835,14 @@ fn function_replacements<T: Parse>(
       }
     ),
   ];
+  if use_trait_tests {
+    result.push(parse_quote_spanned!(*default_span=>
+      #[cfg(debug_assertions)]
+      #(#non_lpt_attributes) *
+      #vis_defaultness #inner_function_signature
+      #block
+    ));
+  }
   result
 }
 
@@ -1124,31 +1077,61 @@ fn has_impl_trait_in_argument_position(signature: &Signature) -> bool {
   result
 }
 
-fn replace_impl_trait_in_argument_position(signature: &mut Signature) {
-  struct Visitor<'a>(&'a mut Vec<(Ident, Punctuated<TypeParamBound, Token![+]>)>);
-  impl<'a> VisitMut for Visitor<'a> {
-    fn visit_type_mut(&mut self, this: &mut Type) {
-      if let Type::ImplTrait(type_impl_trait) = this {
-        let new_parameter = format_ident!("__LivePropTestImplTraitReplacement{}", self.0.len());
-        self.0.push((
-          new_parameter.clone(),
-          std::mem::take(&mut type_impl_trait.bounds),
-        ));
-        *this = parse_quote!(#new_parameter);
+// fn replace_impl_trait_in_argument_position(signature: &mut Signature) {
+//   struct Visitor<'a>(&'a mut Vec<(Ident, Punctuated<TypeParamBound, Token![+]>)>);
+//   impl<'a> VisitMut for Visitor<'a> {
+//     fn visit_type_mut(&mut self, this: &mut Type) {
+//       if let Type::ImplTrait(type_impl_trait) = this {
+//         let new_parameter = format_ident!("__LivePropTestImplTraitReplacement{}", self.0.len());
+//         self.0.push((
+//           new_parameter.clone(),
+//           std::mem::take(&mut type_impl_trait.bounds),
+//         ));
+//         *this = parse_quote!(#new_parameter);
+//       }
+//     }
+//   }
+//
+//   let mut extras = Vec::new();
+//   Visitor(&mut extras).visit_generics_mut(&mut signature.generics);
+//   for parameter in &mut signature.inputs {
+//     Visitor(&mut extras).visit_fn_arg_mut(parameter);
+//   }
+//   for (ident, bounds) in extras {
+//     signature
+//       .generics
+//       .params
+//       .push(parse_quote!(#ident: #bounds))
+//   }
+// }
+
+fn signature_with_patterns_stripped(signature: &Signature) -> Signature {
+  let mut result = signature.clone();
+  for argument in result.inputs.iter_mut() {
+    match argument {
+      FnArg::Receiver(receiver) => {
+        if receiver.reference.is_none() {
+          receiver.mutability = None;
+        }
+      }
+      FnArg::Typed(typed) => {
+        if let Pat::Ident(pat_ident) = &mut *typed.pat {
+          pat_ident.mutability = None;
+          pat_ident.subpat = None;
+        }
       }
     }
   }
 
-  let mut extras = Vec::new();
-  Visitor(&mut extras).visit_generics_mut(&mut signature.generics);
-  for parameter in &mut signature.inputs {
-    Visitor(&mut extras).visit_fn_arg_mut(parameter);
-  }
-  for (ident, bounds) in extras {
-    signature
-      .generics
-      .params
-      .push(parse_quote!(#ident: #bounds))
+  result
+}
+
+fn turbofish_for_signature(signature: &Signature) -> Option<proc_macro2::TokenStream> {
+  let (_impl_generics, ty_generics, _where_clause) = signature.generics.split_for_impl();
+  if has_impl_trait_in_argument_position(signature) {
+    None
+  } else {
+    Some(ty_generics.as_turbofish().into_token_stream())
   }
 }
 

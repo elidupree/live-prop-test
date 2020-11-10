@@ -346,25 +346,23 @@ impl FancierTestedTrait<i32> for () {
   fn method_with_associated_argument_and_default(&self, _argument: Self::Associated) {}
 }
 
-/*
 #[live_prop_test]
 trait ObjectSafeTestedTrait {
   #[live_prop_test(postcondition = "false")]
-  fn method(&self) {}
+  fn object_safe_method(&self) {}
 }
 
 #[live_prop_test(use_trait_tests)]
 impl ObjectSafeTestedTrait for () {
-  fn method(&self) {}
+  fn object_safe_method(&self) {}
 }
 
 #[test]
 #[should_panic(expected = "postcondition")]
 fn tested_trait_is_object_safe() {
   let trait_box: ::std::boxed::Box<dyn ObjectSafeTestedTrait> = ::std::boxed::Box::new(());
-  trait_box.method();
+  trait_box.object_safe_method();
 }
-*/
 
 fn disparate_types_equal(i: i32, u: u32) -> bool {
   i as i64 == u as i64
@@ -389,11 +387,11 @@ fn multiple_olds_fail() {
 #[allow(unused_mut)]
 trait PatternArgumentBindingsTrait: ::std::marker::Sized {
   #[live_prop_test(postcondition = "false")]
-  fn method(mut self, mut _b: i32, mut _e @ _: ()) {}
+  fn method_with_pattern_argument_bindings(mut self, mut _b: i32, mut _e @ _: ()) {}
 }
 
 #[live_prop_test(use_trait_tests)]
 #[allow(unused_mut)]
 impl PatternArgumentBindingsTrait for () {
-  fn method(mut self, mut _b: i32, mut _e @ _: ()) {}
+  fn method_with_pattern_argument_bindings(mut self, mut _b: i32, mut _e @ _: ()) {}
 }
