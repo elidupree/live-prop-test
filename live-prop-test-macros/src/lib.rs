@@ -482,9 +482,12 @@ fn live_prop_test_item_trait(
             })
           }
         ));
-        let original_method: TraitItem = parse_quote_spanned!(*default_span=> #original_signature {
-          ::std::panic!("Called live_prop_test placeholder 'original' method; this is probably a bug in live_prop_test")
-        });
+        let original_method: TraitItem = parse_quote_spanned!(*default_span=>
+          #[allow(unused_variables)]
+          #original_signature {
+            ::std::panic!("Called live_prop_test placeholder 'original' method; this is probably a bug in live_prop_test")
+          }
+        );
         if analyzed_attributes.is_empty() {
           // No tests; use original declaration
           // note that we DON'T skip the above code, because an impl with `use_trait_tests`
