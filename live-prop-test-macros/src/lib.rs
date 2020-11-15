@@ -484,6 +484,7 @@ fn live_prop_test_item_trait(
         ));
         let original_method: TraitItem = parse_quote_spanned!(*default_span=>
           #[allow(unused_variables)]
+          #[allow(unused_mut)]
           #original_signature {
             ::std::panic!("Called live_prop_test placeholder 'original' method; this is probably a bug in live_prop_test")
           }
