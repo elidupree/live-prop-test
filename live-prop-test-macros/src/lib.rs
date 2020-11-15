@@ -830,6 +830,7 @@ fn function_replacements<T: Parse>(
     ),
     parse_quote_spanned!(*default_span=>
       #[cfg(debug_assertions)]
+      #[allow(unused_mut)]
       #(#non_lpt_attributes) *
       #vis_defaultness #signature
       {
