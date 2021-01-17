@@ -11,19 +11,25 @@ error: when using live-prop-test on methods inside an `impl`, you must also put 
    |                                   ^^^^
 
 error: when using live-prop-test on methods inside an `impl`, you must also put the #[live_prop_test] attribute on the containing impl
-  --> $DIR/needs_containing_impl.rs:21:20
+  --> $DIR/needs_containing_impl.rs:21:32
    |
-21 |   fn by_ref_method(&self) {}
+21 |   fn associated_argument(arg: <Self as Trait>::Associated) {}
+   |                                ^^^^
+
+error: when using live-prop-test on methods inside an `impl`, you must also put the #[live_prop_test] attribute on the containing impl
+  --> $DIR/needs_containing_impl.rs:24:20
+   |
+24 |   fn by_ref_method(&self) {}
    |                    ^
 
 error: when using live-prop-test on methods inside an `impl`, you must also put the #[live_prop_test] attribute on the containing impl
-  --> $DIR/needs_containing_impl.rs:24:22
+  --> $DIR/needs_containing_impl.rs:27:22
    |
-24 |   fn by_value_method(self) {}
+27 |   fn by_value_method(self) {}
    |                      ^^^^
 
 error: when using live-prop-test on methods inside an `impl`, you must also put the #[live_prop_test] attribute on the containing impl
-  --> $DIR/needs_containing_impl.rs:29:34
+  --> $DIR/needs_containing_impl.rs:32:34
    |
-29 |   fn associated_constructor() -> Self::Associated;
+32 |   fn associated_constructor() -> Self::Associated;
    |                                  ^^^^

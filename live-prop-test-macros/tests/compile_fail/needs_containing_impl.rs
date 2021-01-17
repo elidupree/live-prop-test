@@ -18,6 +18,9 @@ impl Struct {
   fn associated_constructor() -> <Self as Trait>::Associated {}
 
   #[live_prop_test(postcondition = "false")]
+  fn associated_argument(arg: <Self as Trait>::Associated) {}
+
+  #[live_prop_test(postcondition = "false")]
   fn by_ref_method(&self) {}
 
   #[live_prop_test(postcondition = "false")]
