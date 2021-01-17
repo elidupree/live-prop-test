@@ -21,11 +21,11 @@ use syn::{
   spanned::Spanned,
   visit::{self, Visit},
   visit_mut::{self, VisitMut},
-  Attribute, Expr, ExprCall, FnArg, Generics, Ident, ImplItem, ImplItemMethod, ItemImpl, ItemMacro,
-  ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat, PatIdent, Path, ReturnType, Signature,
-  Stmt, Token, TraitItem, TraitItemMethod, Type,
+  Attribute, Block, Expr, ExprAssign, ExprCall, FnArg, Generics, Ident, ImplItem, ImplItemMethod,
+  Index, ItemConst, ItemImpl, ItemMacro, ItemTrait, Lit, Meta, MetaNameValue, NestedMeta, Pat,
+  PatIdent, Path, PathSegment, ReturnType, Signature, Stmt, Token, TraitItem, TraitItemMethod,
+  Type, TypeImplTrait,
 };
-use syn::{Block, Index, ItemConst, PathSegment, TypeImplTrait};
 
 /// The whole point.
 ///
@@ -888,6 +888,20 @@ impl TestAttribute {
           r#"unrecognized argument to #[live_prop_test(...)]; on a `fn` item, valid arguments are `precondition="expr"` and `postcondition="expr"`"#
         )
       }
+    }
+
+    for condition in result.preconditions.iter().chain(&result.postconditions) {
+      struct ForbidAssignmentVisitor;
+      impl<'a> Visit<'a> for ForbidAssignmentVisitor {
+        fn visit_expr_assign(&mut self, expr_assign: &'a ExprAssign) {
+          abort!(
+            expr_assign.span(),
+            "assignment isn't allowed in live-prop-test conditions; did you mean `==` instead of `=`?",
+          )
+        }
+      }
+
+      ForbidAssignmentVisitor.visit_expr(condition);
     }
 
     result

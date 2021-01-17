@@ -1,0 +1,17 @@
+error: assignment isn't allowed in live-prop-test conditions; did you mean `==` instead of `=`?
+ --> $DIR/assignment_in_condition.rs:3:34
+  |
+3 | #[live_prop_test(postcondition = "result = ()")]
+  |                                  ^^^^^^^^^^^^^
+
+error: assignment isn't allowed in live-prop-test conditions; did you mean `==` instead of `=`?
+ --> $DIR/assignment_in_condition.rs:6:33
+  |
+6 | #[live_prop_test(precondition = "a = b")]
+  |                                 ^^^^^^^
+
+error: assignment isn't allowed in live-prop-test conditions; did you mean `==` instead of `=`?
+  --> $DIR/assignment_in_condition.rs:10:34
+   |
+10 | #[live_prop_test(postcondition = "(a != result) && (b = result)")]
+   |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
