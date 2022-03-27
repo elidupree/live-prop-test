@@ -329,10 +329,9 @@ impl AnalyzedFunctionAttributes {
       }
       test_attributes.push(TestAttribute::from_attr_arguments(&attribute.arguments))
     }
-    let test_bundles: Vec<TestBundle> = test_attributes
+    let test_bundles = test_attributes
       .into_iter()
-      .map(|attribute| attribute.bundle(&mutable_reference_parameter_names))
-      .collect();
+      .map(|attribute| attribute.bundle(mutable_reference_parameter_names));
     let mut setup_expressions = Vec::new();
     let mut finish_statements = Vec::new();
     for (setup, finish) in test_bundles.into_iter().enumerate().map(|(index, bundle)| {
@@ -416,7 +415,7 @@ fn live_prop_test_item_trait(
         let analyzed_attributes = AnalyzedFunctionAttributes::new(
           Span::call_site(),
           &live_prop_test_attributes,
-          &mutable_reference_parameter_names,
+          mutable_reference_parameter_names,
         );
 
         let AnalyzedFunctionAttributes {
@@ -912,7 +911,7 @@ impl TestAttribute {
       parse_quote! (
         if let ::std::result::Result::Err(__live_prop_test_failure_message) = ::live_prop_test::LivePropTestResult::canonicalize(#condition) {
           __live_prop_test_failures.fail_test (::live_prop_test::TestFailure {
-            test: <::std::string::String as ::std::convert::From<&str>>::from(::std::stringify! (#condition)),
+            test: ::std::stringify! (#condition),
             failure_message: __live_prop_test_failure_message,
           });
         }

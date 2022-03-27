@@ -718,7 +718,7 @@ pub struct TestsSetup {
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct TestFailure {
-  pub test: String,
+  pub test: &'static str,
   pub failure_message: Option<String>,
 }
 
