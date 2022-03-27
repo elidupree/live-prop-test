@@ -395,3 +395,61 @@ trait PatternArgumentBindingsTrait: ::std::marker::Sized {
 impl PatternArgumentBindingsTrait for () {
   fn method_with_pattern_argument_bindings(mut self, mut _b: i32, mut _e @ _: ()) {}
 }
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+struct GenericConstStruct<T, const D: usize>([T; D]);
+
+#[live_prop_test]
+impl<T: ::std::marker::Copy + ::std::cmp::PartialEq + ::std::fmt::Debug, const D: usize>
+  GenericConstStruct<T, D>
+{
+  /// A method.
+  ///
+  /// This is mostly copied from a time-steward function; the details don't matter,
+  /// but I felt it was worth including as an example of a relatively complicated function.
+  #[live_prop_test(postcondition = "self.postconditions(input, &result)")]
+  pub fn method(
+    &self,
+    input: impl ::std::marker::Copy + ::std::fmt::Debug + ::std::convert::TryInto<T>,
+  ) -> ::std::option::Option<Self> {
+    if self.0.len() > 5 {
+      return ::std::option::Option::Some(*self);
+    }
+    let input = input.try_into().ok()?;
+    let mut intermediates: [i64; D] = self.0.map(|_| 0);
+    for first_source in ::std::iter::Iterator::rev(1..intermediates.len()) {
+      for source in first_source..intermediates.len() {
+        intermediates[source - 1] =
+          intermediates[source - 1].checked_add(intermediates[source].checked_mul(4)?)?;
+      }
+    }
+    let mut output = [0; D];
+    for (index, value) in ::std::iter::Iterator::enumerate(intermediates.iter()) {
+      output[index] = ::std::convert::TryInto::<i64>::try_into(*value).ok()?;
+    }
+    let _ = input;
+    ::std::option::Option::Some(GenericConstStruct(self.0))
+  }
+
+  fn postconditions(
+    &self,
+    input: impl ::std::marker::Copy + ::std::fmt::Debug + ::std::convert::TryInto<T>,
+    result: &::std::option::Option<Self>,
+  ) -> ::std::result::Result<(), ::std::string::String> {
+    let _ = input;
+    if let ::std::option::Option::Some(result) = result {
+      lpt_assert_eq!(self.0[0], result.method(input).unwrap().0[1], "some error");
+    }
+    ::std::result::Result::Ok(())
+  }
+}
+
+#[test]
+fn generic_const_struct_pass() {
+  GenericConstStruct([3, 3]).method(4);
+}
+#[test]
+#[should_panic(expected = "postcondition")]
+fn generic_const_struct_fail() {
+  GenericConstStruct([2, 3]).method(4);
+}
