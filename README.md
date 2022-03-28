@@ -32,19 +32,13 @@ Put this in your Cargo.toml:
 live-prop-test = "0.1.0"
 ```
 
-And put this at the top of your main function (if you're writing a binary crate):
+And put this at the top of your `main` function (if you're writing a binary crate):
 
 ```rust
 live_prop_test::initialize();
 ```
 
-And this at the top of any unit tests:
-
-```rust
-live_prop_test::initialize_for_unit_tests();
-```
-
-If live-prop-test is not initialized, it won't run any tests. Thus, if you're writing a library crate, you can freely add live-prop-test tests for your own internal testing, without any worry about exposing dependent crates to significant runtime cost (or unreliable panics, if your library has a bug), unless they explicitly opt in.
+In a binary crate, if live-prop-test is not initialized, it won't run any tests. Thus, if you're writing a library crate, you can freely add live-prop-test tests for your own internal testing, without any worry about exposing dependent crates to significant runtime cost (or unreliable panics, if your library has a bug), unless they explicitly opt in.
 
 To run tests on `wasm32` or `asmjs` targets, you also need to enable either the `wasm-bindgen` feature or the `stdweb` feature, to give live-prop-test a source of timing information:
 
@@ -102,8 +96,6 @@ thread 'main' panicked at 'live-prop-test postcondition failure:
 // you'll need to implement your own method of recording and replaying that data.
 #[test]
 fn exp2_regression() {
-  live_prop_test::initialize_for_unit_tests();
-
   exp2(5);
 }
 
@@ -111,7 +103,9 @@ fn exp2_regression() {
 
 In this case, the generated regression test is valid code, so let's copy it directly into our code!
 
-`live_prop_test::initialize_for_unit_tests()` disables time-based throttling within the test, making sure that all direct function calls are tested. (If a function with tests calls another function with tests, we don't currently make any API guarantees about whether the inner function will be tested. The current implementation tests all such calls, which could be a problem for expensive tests on calls with many iterations/branches. A future version of live-prop-test may test none of them, or test only a deterministic subset of them.)
+During *unit* tests, there is no time-based throttling for top-level calls to functions from the crate being tested. All live-prop-test tests on those calls will always be run, even if you don't initialize live-prop-test explicitly.
+
+(Note that this only applies to top-level calls; if a function with tests calls another function with tests, we don't currently make any API guarantees about whether the inner function will be tested. The current implementation tests all such calls, which could be a problem for expensive tests on calls with many iterations/branches. A future version of live-prop-test may test none of them, or test only a subset of them.)
 
 
 ## Details
@@ -119,7 +113,7 @@ In this case, the generated regression test is valid code, so let's copy it dire
 
 ### Test grouping
 
-Muliple conditions within the *same* attribute will either run as a group, or be skipped as a group:
+Multiple conditions within the *same* attribute will either run as a group, or be skipped as a group:
 ```rust
 #[live_prop_test(
   precondition = "*number > 0",
@@ -129,7 +123,7 @@ fn double_positive_number(number: &mut u32) {
   *number *= 2
 }
 ```
-While conditions within *different* attribute make independent choices:
+However, conditions within *different* attributes make independent choices:
 ```rust
 #[live_prop_test(postcondition = "cheap_test(result)")]
 #[live_prop_test(postcondition = "expensive_test(result)")]
@@ -178,7 +172,7 @@ In release builds, the `#[live_prop_test]` attribute on a function does nothing.
 3. If any tests are running, store the string representations of the arguments.
 4. Call the original function and store its return value.
 5. For each test group that is running, evaluate the postcondition expressions.
-6. Returns the stored result.
+6. Return the stored result.
 
 On each function call, if *any* tests are run, we always begin by generating String representations of the inputs. So if the inputs are large, the testing will take nontrivial time even if the conditions are trivial. This is a safe default, because – if a postcondition fails – we can always print out the original values of the failing inputs, even if there was interior mutability. (And as always, the test being expensive won't slow down the program much, only make the test run less often.) We may add a way to override this behavior in the future – please post an issue on the repository if you have a use case that needs it!
 

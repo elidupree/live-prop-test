@@ -26,14 +26,12 @@ fn test_exp2<'a>(exponent: i32, power: i32) -> ::std::result::Result<(), ::std::
 
 #[test]
 fn test_exp2_works() {
-  ::live_prop_test::initialize_for_internal_tests();
   exp2(4);
 }
 
 #[test]
 #[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_wrong_fails() {
-  ::live_prop_test::initialize_for_internal_tests();
   exp2_wrong(4);
 }
 
@@ -42,7 +40,6 @@ fn generic_inferred_function<T: ::std::fmt::Debug>(_input: T) {}
 
 #[test]
 fn generic_inferred() {
-  ::live_prop_test::initialize_for_internal_tests();
   generic_inferred_function(4);
 }
 
@@ -51,7 +48,6 @@ fn generic_explicit_function<T: ::std::default::Default>() {}
 
 #[test]
 fn generic_explicit() {
-  ::live_prop_test::initialize_for_internal_tests();
   generic_explicit_function::<i32>();
 }
 
@@ -61,7 +57,6 @@ fn implicit_no_debug_function<T>(_input: T) {}
 #[test]
 #[should_panic(expected = "<no Debug impl>")]
 fn implicit_no_debug() {
-  ::live_prop_test::initialize_for_internal_tests();
   implicit_no_debug_function(4);
 }
 
@@ -73,7 +68,6 @@ fn explicit_no_debug_function(#[live_prop_test(no_debug)] _input: i32) {}
 #[test]
 #[should_panic(expected = "<Debug impl explicitly disabled>")]
 fn explicit_no_debug() {
-  ::live_prop_test::initialize_for_internal_tests();
   explicit_no_debug_function(4);
 }*/
 
@@ -119,28 +113,24 @@ impl Exp2Field for Fielded {
 
 #[test]
 fn test_exp2_field_works() {
-  ::live_prop_test::initialize_for_internal_tests();
   exp2_field(&mut Fielded { field: 4 });
 }
 
 #[test]
 #[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_field_wrong_fails() {
-  ::live_prop_test::initialize_for_internal_tests();
   exp2_field_wrong(&mut Fielded { field: 4 });
 }
 
 #[test]
 #[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_field_wrong_inherent_method_fails() {
-  ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field_wrong();
 }
 
 #[test]
 #[should_panic(expected = "assertion failed: `(left == right)`")]
 fn test_exp2_field_wrong_trait_method_fails() {
-  ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).exp2_field_wrong_trait_method();
 }
 
@@ -168,7 +158,6 @@ where
 
 #[test]
 fn call_get_field_muts() {
-  ::live_prop_test::initialize_for_internal_tests();
   (Fielded { field: 4 }).get_field_mut();
   GenericStruct(5).get_field_mut();
 }
@@ -218,7 +207,6 @@ where
 
 #[test]
 fn implementor_without_attribute_passes_non_default() {
-  ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithoutAttribute::method_without_default();
   ImplementorWithoutAttribute.self_method_without_default(5);
   ImplementorWithoutAttribute::untested_method();
@@ -227,49 +215,42 @@ fn implementor_without_attribute_passes_non_default() {
 #[test]
 #[should_panic(expected = "postcondition")]
 fn implementor_without_attribute_fails_default() {
-  ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithoutAttribute::method_with_default();
 }
 
 #[test]
 #[should_panic(expected = "postcondition")]
 fn implementor_without_attribute_fails_default_self() {
-  ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithoutAttribute.self_method_with_default(5);
 }
 
 #[test]
 #[should_panic(expected = "postcondition")]
 fn implementor_with_attribute_fails_non_default() {
-  ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithAttribute::method_without_default();
 }
 
 #[test]
 #[should_panic(expected = "postcondition")]
 fn implementor_with_attribute_fails_non_default_self() {
-  ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithAttribute.self_method_without_default(5);
 }
 
 #[test]
 #[should_panic(expected = "postcondition")]
 fn implementor_with_attribute_fails_default() {
-  ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithAttribute::method_with_default();
 }
 
 #[test]
 #[should_panic(expected = "postcondition")]
 fn implementor_with_attribute_fails_default_self() {
-  ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithAttribute.self_method_with_default(5);
 }
 
 #[test]
 #[should_panic(expected = "2 postconditions")]
 fn implementor_with_own_tests_fails_twice() {
-  ::live_prop_test::initialize_for_internal_tests();
   ImplementorWithOwnTestsAndParameter::<i32>::method_without_default();
 }
 

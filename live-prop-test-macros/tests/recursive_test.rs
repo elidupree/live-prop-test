@@ -53,7 +53,6 @@ fn test_factorial(input: i32, result: i32, tracker: &RefCell<TestTracker>) -> Re
 
 #[test]
 fn only_original_call_gets_tested_when_test_calls_original_function() {
-  ::live_prop_test::initialize_for_internal_tests();
   let tracker = RefCell::new(TestTracker {
     calls: 0,
     runs: Vec::new(),
@@ -67,7 +66,6 @@ fn only_original_call_gets_tested_when_test_calls_original_function() {
 
 #[test]
 fn all_recursive_calls_get_tested_when_original_function_calls_itself() {
-  ::live_prop_test::initialize_for_internal_tests();
   let tracker = RefCell::new(TestTracker {
     calls: 0,
     runs: Vec::new(),
