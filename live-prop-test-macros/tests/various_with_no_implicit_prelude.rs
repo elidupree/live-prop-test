@@ -13,7 +13,7 @@ fn exp2_wrong(exponent: i32) -> i32 {
   2 << exponent
 }
 
-fn test_exp2<'a>(exponent: i32, power: i32) -> ::std::result::Result<(), ::std::string::String> {
+fn test_exp2(exponent: i32, power: i32) -> ::std::result::Result<(), ::std::string::String> {
   lpt_assert_eq!(
     power,
     ::std::iter::Iterator::product::<i32>(::std::iter::Iterator::take(
@@ -368,13 +368,23 @@ fn multiple_olds_fail() {
 #[allow(unused_mut)]
 trait PatternArgumentBindingsTrait: ::std::marker::Sized {
   #[live_prop_test(postcondition = "false")]
-  fn method_with_pattern_argument_bindings(mut self, mut _b: i32, mut _e @ _: ()) {}
+  fn method_with_pattern_argument_bindings(
+    mut self,
+    mut _b: i32,
+    #[allow(clippy::redundant_pattern)] mut _e @ _: (),
+  ) {
+  }
 }
 
 #[live_prop_test(use_trait_tests)]
 #[allow(unused_mut)]
 impl PatternArgumentBindingsTrait for () {
-  fn method_with_pattern_argument_bindings(mut self, mut _b: i32, mut _e @ _: ()) {}
+  fn method_with_pattern_argument_bindings(
+    mut self,
+    mut _b: i32,
+    #[allow(clippy::redundant_pattern)] mut _e @ _: (),
+  ) {
+  }
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
