@@ -1016,9 +1016,9 @@ impl TestAttribute {
     let old_identifiers = collector.old_identifiers;
 
     let setup_closure = parse_quote! (
+      #[allow(clippy::unused_unit)]
       | __live_prop_test_failures | {
         #(#preconditions) *
-        #[allow(clippy::unused_unit)]
         (#(#old_expressions,)*)
       }
     );
